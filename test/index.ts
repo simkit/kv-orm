@@ -30,7 +30,7 @@ async function run() {
   console.log("New User created:", newUser);
 
   console.log("\nRetrieving user by ID...");
-  const retrievedUser = await usersOrm.getById(newUser.id);
+  const retrievedUser = await usersOrm.get(newUser.id);
 
   console.log("Retrieved User:", retrievedUser);
 
