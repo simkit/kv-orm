@@ -42,6 +42,7 @@ export type KvOrmHooks<
   maybeGet?: Hooks<string, z.infer<S> | null>;
   getAll?: Hooks<string, z.infer<S>[]>;
   create?: Hooks<z.input<S>, z.infer<S>>;
+  createBulk?: Hooks<z.input<S>[], z.infer<S>[]>;
   update?: Hooks<{ id: string; patch: Partial<z.input<S>> }, z.infer<S> | null>;
   updateOrFail?: Hooks<{ id: string; patch: Partial<z.input<S>> }, z.infer<S>>;
   delete?: Hooks<string, boolean>;

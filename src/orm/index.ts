@@ -83,6 +83,34 @@ export class KvOrm<
     return parsed;
   }
 
+  async createBulk(
+    data: z.input<S>[],
+    options?: KvOrmMethodOptions<z.input<S>[], z.infer<S>[]>,
+  ): Promise<z.infer<S>[]> {
+    const hooksToRun = [
+      this.initialHooks.createBulk,
+      options?.hooks,
+      this.dynamicHooks.createBulk,
+    ];
+
+    await this.runHooks(hooksToRun, "before", data);
+
+    const parsedEntities = data.map((d) => this.entitySchema.parse(d));
+
+    const kvPairs: string[] = [];
+    for (const entity of parsedEntities) {
+      kvPairs.push(this.key(entity.id as string), JSON.stringify(entity));
+    }
+
+    if (kvPairs.length > 0) {
+      await this.kv.mset(...kvPairs);
+    }
+
+    await this.runHooks(hooksToRun, "after", data, parsedEntities);
+
+    return parsedEntities;
+  }
+
   async get(
     id: string,
     options?: KvOrmMethodOptions<string, z.infer<S>>,
