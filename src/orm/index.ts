@@ -80,13 +80,12 @@ export class KvOrm<
     return keys;
   }
 
-  private async updateIndexes(
+  private updateIndexes(
+    multi: ReturnType<Redis["multi"]>,
     entity: z.infer<S>,
     isUpdate: boolean = false,
     oldEntity?: z.infer<S>,
-  ): Promise<void> {
-    const operations: Promise<void>[] = [];
-
+  ): void {
     for (const field in this.indexedFields) {
       const fieldKey = field as keyof z.infer<S>;
       const indexType = this.indexedFields[fieldKey];
@@ -97,17 +96,11 @@ export class KvOrm<
       if (indexType === "set") {
         if (isUpdate && oldValue !== value) {
           if (oldValue !== undefined && oldValue !== null) {
-            operations.push(
-              this.kv.srem(this.setIndexKey(fieldKey, oldValue), id).then(
-                () => {},
-              ),
-            );
+            multi.srem(this.setIndexKey(fieldKey, oldValue), id);
           }
         }
         if (value !== undefined && value !== null) {
-          operations.push(
-            this.kv.sadd(this.setIndexKey(fieldKey, value), id).then(() => {}),
-          );
+          multi.sadd(this.setIndexKey(fieldKey, value), id);
         }
       } else if (
         indexType === "zset" && (isUpdate ? oldValue !== value : true)
@@ -118,13 +111,10 @@ export class KvOrm<
         if (
           score !== undefined && score !== null && typeof score === "number"
         ) {
-          operations.push(
-            this.kv.zadd(this.zsetIndexKey(fieldKey), score, id).then(() => {}),
-          );
+          multi.zadd(this.zsetIndexKey(fieldKey), score, id);
         }
       }
     }
-    await Promise.all(operations);
   }
 
   private normalizeEntity(
@@ -163,8 +153,12 @@ export class KvOrm<
     await this.runHooks(hooksToRun, "before", data);
 
     const entity = this.normalizeEntity(data);
-    await this.kv.set(this.key(entity.id as string), JSON.stringify(entity));
-    await this.updateIndexes(entity);
+
+    // Start a Redis transaction to ensure atomicity
+    const multi = this.kv.multi();
+    multi.set(this.key(entity.id as string), JSON.stringify(entity));
+    this.updateIndexes(multi, entity);
+    await multi.exec();
 
     await this.runHooks(hooksToRun, "after", data, entity);
 
@@ -183,15 +177,13 @@ export class KvOrm<
     await this.runHooks(hooksToRun, "before", data);
 
     const entities = data.map((d) => this.normalizeEntity(d));
-    const kvPairs = entities.flatMap((entity) => [
-      this.key(entity.id as string),
-      JSON.stringify(entity),
-    ]);
 
-    if (kvPairs.length > 0) {
-      await this.kv.mset(...kvPairs);
-      await Promise.all(entities.map((e) => this.updateIndexes(e)));
+    const multi = this.kv.multi();
+    for (const entity of entities) {
+      multi.set(this.key(entity.id as string), JSON.stringify(entity));
+      this.updateIndexes(multi, entity);
     }
+    await multi.exec();
 
     await this.runHooks(hooksToRun, "after", data, entities);
 
@@ -286,9 +278,14 @@ export class KvOrm<
               this.setIndexKey(field, val as z.infer<S>[K])
             );
             const tempKey = `${this.prefix}:temp:${randomUUID()}`;
-            await this.kv.sunionstore(tempKey, ...keys);
-            ids = await this.kv.smembers(tempKey);
-            await this.kv.del(tempKey);
+            const results = await this.kv.multi()
+              .sunionstore(tempKey, ...keys)
+              .expire(tempKey, 30)
+              .exec();
+
+            if (results && results[0] && results[0][1] !== null) {
+              ids = await this.kv.smembers(tempKey);
+            }
           }
           break;
         case "ne": {
@@ -485,13 +482,25 @@ export class KvOrm<
 
     await this.runHooks(hooksToRun, "before", input);
 
+    await this.kv.watch(this.key(id));
     const existing = await this.maybeGet(id);
-    if (!existing) return null;
+
+    if (!existing) {
+      await this.kv.unwatch();
+      return null;
+    }
 
     const updated = this.normalizeEntity({ ...existing, ...patch }, false);
 
-    await this.kv.set(this.key(updated.id as string), JSON.stringify(updated));
-    await this.updateIndexes(updated, true, existing);
+    const multi = this.kv.multi();
+    multi.set(this.key(updated.id as string), JSON.stringify(updated));
+    this.updateIndexes(multi, updated, true, existing);
+
+    const results = await multi.exec();
+
+    if (results === null) {
+      return null;
+    }
 
     await this.runHooks(hooksToRun, "after", input, updated);
 
@@ -515,21 +524,34 @@ export class KvOrm<
 
     await this.runHooks(hooksToRun, "before", input);
 
+    await this.kv.watch(this.key(id));
     const existing = await this.get(id);
 
     const updated = this.normalizeEntity({ ...existing, ...patch }, false);
 
-    await this.kv.set(this.key(updated.id as string), JSON.stringify(updated));
-    await this.updateIndexes(updated, true, existing);
+    const multi = this.kv.multi();
+    multi.set(this.key(updated.id as string), JSON.stringify(updated));
+    this.updateIndexes(multi, updated, true, existing);
+
+    const results = await multi.exec();
+
+    if (results === null) {
+      throw new Error(
+        `Optimistic locking failed for key: ${
+          this.key(id)
+        }. Please retry the operation.`,
+      );
+    }
 
     await this.runHooks(hooksToRun, "after", input, updated);
 
     return updated;
   }
 
-  private async deleteIndexes(entity: z.infer<S>): Promise<void> {
-    const operations: Promise<void>[] = [];
-
+  private deleteIndexes(
+    multi: ReturnType<Redis["multi"]>,
+    entity: z.infer<S>,
+  ): void {
     for (const field in this.indexedFields) {
       const fieldKey = field as keyof z.infer<S>;
       const indexType = this.indexedFields[fieldKey];
@@ -538,20 +560,15 @@ export class KvOrm<
 
       if (indexType === "set") {
         if (value !== undefined && value !== null) {
-          operations.push(
-            this.kv.srem(
-              this.setIndexKey(fieldKey, value as z.infer<S>[keyof z.infer<S>]),
-              id,
-            ).then(() => {}),
+          multi.srem(
+            this.setIndexKey(fieldKey, value as z.infer<S>[keyof z.infer<S>]),
+            id,
           );
         }
       } else if (indexType === "zset") {
-        operations.push(
-          this.kv.zrem(this.zsetIndexKey(fieldKey), id).then(() => {}),
-        );
+        multi.zrem(this.zsetIndexKey(fieldKey), id);
       }
     }
-    await Promise.all(operations);
   }
 
   async delete(
@@ -566,15 +583,14 @@ export class KvOrm<
 
     await this.runHooks(hooksToRun, "before", id);
     const entity = await this.maybeGet(id);
+    if (!entity) return false;
 
-    const result = (await this.kv.del(this.key(id))) === 1;
-    if (result && entity) {
-      await this.deleteIndexes(entity);
-    }
+    const multi = this.kv.multi();
+    multi.del(this.key(id));
+    this.deleteIndexes(multi, entity);
+    const results = await multi.exec();
 
-    await this.runHooks(hooksToRun, "after", id, result);
-
-    return result;
+    return results !== null && results[0] !== null && results[0][1] === 1;
   }
 
   async deleteAll(
@@ -599,12 +615,21 @@ export class KvOrm<
       this.entitySchema.parse(JSON.parse(v!))
     );
 
-    const result = await this.kv.del(...keys);
-    await Promise.all(entities.map((e) => this.deleteIndexes(e)));
+    const multi = this.kv.multi();
+    multi.del(...keys);
+    for (const entity of entities) {
+      this.deleteIndexes(multi, entity);
+    }
+    const results = await multi.exec();
 
-    await this.runHooks(hooksToRun, "after", pattern, result);
+    if (results === null || !results[0] || results[0][1] === null) {
+      return 0;
+    }
+    const deletedCount = results[0][1] as number;
 
-    return result;
+    await this.runHooks(hooksToRun, "after", pattern, deletedCount);
+
+    return deletedCount;
   }
 
   addHooks(hooks: KvOrmHooks<S>) {
