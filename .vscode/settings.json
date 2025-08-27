@@ -1,3 +1,14 @@
 {
-  "deno.enable": true
+  "deno.enable": true,
+  "cSpell.words": [
+    "sadd",
+    "smembers",
+    "srem",
+    "sunion",
+    "sunionstore",
+    "zadd",
+    "zrangebyscore",
+    "zrem",
+    "zset"
+  ]
 }

@@ -16,6 +16,7 @@ export interface KvOrmOptions<
   kv: Redis;
   schema: S;
   hooks?: KvOrmHooks<S>;
+  indexedFields?: { [K in keyof z.infer<S>]?: "set" | "zset" };
 }
 
 // ORM options for individual methods. Now generic.
@@ -33,7 +34,7 @@ export type Hooks<Input, Result> = {
   after?: (args: AfterHookArgs<Input, Result>) => Promise<void> | void;
 };
 
-// findWhere input
+// Create a type for the findWhere input
 export type FindWhereInput<
   S,
   K extends keyof z.infer<S>,
@@ -68,9 +69,3 @@ export type OperatorFor<T> = T extends number | Date
   : T extends string
     ? "eq" | "ne" | "lt" | "lte" | "gt" | "gte" | "like" | "in" | "nin"
   : "eq" | "ne" | "in" | "nin";
-
-type Comparable = string | number | Date;
-
-export type ComparableFields<S> = {
-  [K in keyof S]: S[K] extends Comparable ? K : never;
-}[keyof S];

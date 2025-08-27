@@ -22,15 +22,29 @@ export class KvOrm<
   private readonly initialHooks: KvOrmHooks<S>;
   private dynamicHooks: KvOrmHooks<S> = {};
 
+  private indexedFields: { [K in keyof z.infer<S>]?: "set" | "zset" };
+
   constructor(opts: KvOrmOptions<S>) {
     this.prefix = opts.prefix;
     this.kv = opts.kv;
     this.entitySchema = opts.schema;
     this.initialHooks = opts.hooks ?? {};
+    this.indexedFields = opts.indexedFields ?? {};
   }
 
   private key(id: string): string {
     return `${this.prefix}:${id}`;
+  }
+
+  private setIndexKey<K extends keyof z.infer<S>>(
+    field: K,
+    value: z.infer<S>[K],
+  ): string {
+    return `${this.prefix}:idx:set:${String(field)}:${value}`;
+  }
+
+  private zsetIndexKey(field: keyof z.infer<S>): string {
+    return `${this.prefix}:idx:zset:${String(field)}`;
   }
 
   private async runHooks<Input, Result>(
@@ -64,6 +78,53 @@ export class KvOrm<
       keys.push(...batch);
     } while (cursor !== "0");
     return keys;
+  }
+
+  private async updateIndexes(
+    entity: z.infer<S>,
+    isUpdate: boolean = false,
+    oldEntity?: z.infer<S>,
+  ): Promise<void> {
+    const operations: Promise<void>[] = [];
+
+    for (const field in this.indexedFields) {
+      const fieldKey = field as keyof z.infer<S>;
+      const indexType = this.indexedFields[fieldKey];
+      const value = entity[fieldKey];
+      const oldValue = isUpdate ? oldEntity?.[fieldKey] : undefined;
+      const id = entity.id as string;
+
+      if (indexType === "set") {
+        if (isUpdate && oldValue !== value) {
+          if (oldValue !== undefined && oldValue !== null) {
+            operations.push(
+              this.kv.srem(this.setIndexKey(fieldKey, oldValue), id).then(
+                () => {},
+              ),
+            );
+          }
+        }
+        if (value !== undefined && value !== null) {
+          operations.push(
+            this.kv.sadd(this.setIndexKey(fieldKey, value), id).then(() => {}),
+          );
+        }
+      } else if (
+        indexType === "zset" && (isUpdate ? oldValue !== value : true)
+      ) {
+        const score = (value instanceof Date)
+          ? value.getTime()
+          : value as number;
+        if (
+          score !== undefined && score !== null && typeof score === "number"
+        ) {
+          operations.push(
+            this.kv.zadd(this.zsetIndexKey(fieldKey), score, id).then(() => {}),
+          );
+        }
+      }
+    }
+    await Promise.all(operations);
   }
 
   private normalizeEntity(
@@ -103,6 +164,7 @@ export class KvOrm<
 
     const entity = this.normalizeEntity(data);
     await this.kv.set(this.key(entity.id as string), JSON.stringify(entity));
+    await this.updateIndexes(entity);
 
     await this.runHooks(hooksToRun, "after", data, entity);
 
@@ -128,6 +190,7 @@ export class KvOrm<
 
     if (kvPairs.length > 0) {
       await this.kv.mset(...kvPairs);
+      await Promise.all(entities.map((e) => this.updateIndexes(e)));
     }
 
     await this.runHooks(hooksToRun, "after", data, entities);
@@ -199,6 +262,98 @@ export class KvOrm<
     return result;
   }
 
+  private async findWhereIndexed<
+    K extends keyof z.infer<S>,
+    V extends z.infer<S>[K],
+  >(
+    field: K,
+    operator: OperatorFor<V>,
+    value: V | V[],
+  ): Promise<string[]> {
+    const indexType = this.indexedFields[field];
+    let ids: string[] = [];
+
+    if (indexType === "set") {
+      switch (operator) {
+        case "eq":
+          ids = await this.kv.smembers(
+            this.setIndexKey(field, value as z.infer<S>[K]),
+          );
+          break;
+        case "in":
+          if (Array.isArray(value)) {
+            const keys = value.map((val) =>
+              this.setIndexKey(field, val as z.infer<S>[K])
+            );
+            const tempKey = `${this.prefix}:temp:${randomUUID()}`;
+            await this.kv.sunionstore(tempKey, ...keys);
+            ids = await this.kv.smembers(tempKey);
+            await this.kv.del(tempKey);
+          }
+          break;
+        case "ne": {
+          const allIds = await this.scanKeys().then((keys) =>
+            keys.map((k) => k.replace(`${this.prefix}:`, ""))
+          );
+          const badIds = await this.kv.smembers(
+            this.setIndexKey(field, value as z.infer<S>[K]),
+          );
+          ids = allIds.filter((id) => !badIds.includes(id));
+          break;
+        }
+        case "nin": {
+          const allIds = await this.scanKeys().then((keys) =>
+            keys.map((k) => k.replace(`${this.prefix}:`, ""))
+          );
+          const badIds = Array.isArray(value)
+            ? await this.kv.sunion(
+              ...value.map((v) => this.setIndexKey(field, v as z.infer<S>[K])),
+            )
+            : [];
+          ids = allIds.filter((id) => !badIds.includes(id));
+          break;
+        }
+      }
+    } else if (indexType === "zset") {
+      const val = (value instanceof Date) ? value.getTime() : value as number;
+      const start = "-inf";
+      const end = "+inf";
+
+      switch (operator) {
+        case "lt":
+          ids = await this.kv.zrangebyscore(
+            this.zsetIndexKey(field),
+            start,
+            `(${val}`,
+          );
+          break;
+        case "lte":
+          ids = await this.kv.zrangebyscore(
+            this.zsetIndexKey(field),
+            start,
+            `${val}`,
+          );
+          break;
+        case "gt":
+          ids = await this.kv.zrangebyscore(
+            this.zsetIndexKey(field),
+            `(${val}`,
+            end,
+          );
+          break;
+        case "gte":
+          ids = await this.kv.zrangebyscore(
+            this.zsetIndexKey(field),
+            `${val}`,
+            end,
+          );
+          break;
+      }
+    }
+
+    return ids;
+  }
+
   async findWhere<
     K extends keyof z.infer<S>,
     V extends z.infer<S>[K],
@@ -223,68 +378,94 @@ export class KvOrm<
     const input = { field, operator, value };
     await this.runHooks(hooksToRun, "before", input);
 
-    const allEntities = await this.getAll("*");
+    let ids: string[] = [];
+    const indexType = this.indexedFields[field];
 
-    const results = allEntities.filter((entity) => {
-      const fieldValue = entity[field] as V;
+    if (indexType) {
+      const supportedBySet = ["eq", "ne", "in", "nin"].includes(operator);
+      const supportedByZset = ["lt", "lte", "gt", "gte", "in"].includes(
+        operator,
+      );
 
-      switch (operator) {
-        case "eq":
-          return fieldValue === value;
-        case "ne":
-          return fieldValue !== value;
-        case "lt":
-          if (
-            typeof fieldValue === "string" && typeof value === "string" ||
-            typeof fieldValue === "number" && typeof value === "number" ||
-            fieldValue instanceof Date && value instanceof Date
-          ) {
-            return fieldValue < value;
-          }
-          return false;
-        case "lte":
-          if (
-            typeof fieldValue === "string" && typeof value === "string" ||
-            typeof fieldValue === "number" && typeof value === "number" ||
-            fieldValue instanceof Date && value instanceof Date
-          ) {
-            return fieldValue <= value;
-          }
-          return false;
-        case "gt":
-          if (
-            typeof fieldValue === "string" && typeof value === "string" ||
-            typeof fieldValue === "number" && typeof value === "number" ||
-            fieldValue instanceof Date && value instanceof Date
-          ) {
-            return fieldValue > value;
-          }
-          return false;
-        case "gte":
-          if (
-            typeof fieldValue === "string" && typeof value === "string" ||
-            typeof fieldValue === "number" && typeof value === "number" ||
-            fieldValue instanceof Date && value instanceof Date
-          ) {
-            return fieldValue >= value;
-          }
-          return false;
-        case "like":
-          return (
-            typeof fieldValue === "string" &&
-            typeof value === "string" &&
-            fieldValue.toLowerCase().includes(value.toLowerCase())
-          );
-        case "in":
-          return Array.isArray(value) && (value as V[]).includes(fieldValue);
-        case "nin":
-          return Array.isArray(value) && !(value as V[]).includes(fieldValue);
+      if (
+        (indexType === "set" && supportedBySet) ||
+        (indexType === "zset" && supportedByZset)
+      ) {
+        ids = await this.findWhereIndexed(field, operator, value);
       }
-    });
+    }
 
-    await this.runHooks(hooksToRun, "after", input, results);
+    if (!ids.length && (!indexType || ["like"].includes(operator))) {
+      const allEntities = await this.getAll("*");
+      const results = allEntities.filter((entity) => {
+        const fieldValue = entity[field] as V;
 
-    return results;
+        switch (operator) {
+          case "eq":
+            return fieldValue === value;
+          case "ne":
+            return fieldValue !== value;
+          case "lt":
+            if (
+              typeof fieldValue === "string" && typeof value === "string" ||
+              typeof fieldValue === "number" && typeof value === "number" ||
+              fieldValue instanceof Date && value instanceof Date
+            ) {
+              return fieldValue < value;
+            }
+            return false;
+          case "lte":
+            if (
+              typeof fieldValue === "string" && typeof value === "string" ||
+              typeof fieldValue === "number" && typeof value === "number" ||
+              fieldValue instanceof Date && value instanceof Date
+            ) {
+              return fieldValue <= value;
+            }
+            return false;
+          case "gt":
+            if (
+              typeof fieldValue === "string" && typeof value === "string" ||
+              typeof fieldValue === "number" && typeof value === "number" ||
+              fieldValue instanceof Date && value instanceof Date
+            ) {
+              return fieldValue > value;
+            }
+            return false;
+          case "gte":
+            if (
+              typeof fieldValue === "string" && typeof value === "string" ||
+              typeof fieldValue === "number" && typeof value === "number" ||
+              fieldValue instanceof Date && value instanceof Date
+            ) {
+              return fieldValue >= value;
+            }
+            return false;
+          case "like":
+            return (
+              typeof fieldValue === "string" &&
+              typeof value === "string" &&
+              fieldValue.toLowerCase().includes(value.toLowerCase())
+            );
+          case "in":
+            return Array.isArray(value) && (value as V[]).includes(fieldValue);
+          case "nin":
+            return Array.isArray(value) && !(value as V[]).includes(fieldValue);
+        }
+      });
+      await this.runHooks(hooksToRun, "after", input, results);
+      return results;
+    }
+
+    const raws = ids.length
+      ? await this.kv.mget(...ids.map((id) => this.key(id)))
+      : [];
+    const result = raws.filter(Boolean).map((v) =>
+      this.entitySchema.parse(JSON.parse(v!))
+    );
+
+    await this.runHooks(hooksToRun, "after", input, result);
+    return result;
   }
 
   async update(
@@ -310,6 +491,7 @@ export class KvOrm<
     const updated = this.normalizeEntity({ ...existing, ...patch }, false);
 
     await this.kv.set(this.key(updated.id as string), JSON.stringify(updated));
+    await this.updateIndexes(updated, true, existing);
 
     await this.runHooks(hooksToRun, "after", input, updated);
 
@@ -338,10 +520,38 @@ export class KvOrm<
     const updated = this.normalizeEntity({ ...existing, ...patch }, false);
 
     await this.kv.set(this.key(updated.id as string), JSON.stringify(updated));
+    await this.updateIndexes(updated, true, existing);
 
     await this.runHooks(hooksToRun, "after", input, updated);
 
     return updated;
+  }
+
+  private async deleteIndexes(entity: z.infer<S>): Promise<void> {
+    const operations: Promise<void>[] = [];
+
+    for (const field in this.indexedFields) {
+      const fieldKey = field as keyof z.infer<S>;
+      const indexType = this.indexedFields[fieldKey];
+      const value = entity[fieldKey];
+      const id = entity.id as string;
+
+      if (indexType === "set") {
+        if (value !== undefined && value !== null) {
+          operations.push(
+            this.kv.srem(
+              this.setIndexKey(fieldKey, value as z.infer<S>[keyof z.infer<S>]),
+              id,
+            ).then(() => {}),
+          );
+        }
+      } else if (indexType === "zset") {
+        operations.push(
+          this.kv.zrem(this.zsetIndexKey(fieldKey), id).then(() => {}),
+        );
+      }
+    }
+    await Promise.all(operations);
   }
 
   async delete(
@@ -355,8 +565,12 @@ export class KvOrm<
     ];
 
     await this.runHooks(hooksToRun, "before", id);
+    const entity = await this.maybeGet(id);
 
     const result = (await this.kv.del(this.key(id))) === 1;
+    if (result && entity) {
+      await this.deleteIndexes(entity);
+    }
 
     await this.runHooks(hooksToRun, "after", id, result);
 
@@ -376,7 +590,17 @@ export class KvOrm<
     await this.runHooks(hooksToRun, "before", pattern);
 
     const keys = await this.scanKeys(pattern);
-    const result = keys.length ? await this.kv.del(...keys) : 0;
+    if (!keys.length) {
+      return 0;
+    }
+
+    const raws = await this.kv.mget(...keys);
+    const entities = raws.filter(Boolean).map((v) =>
+      this.entitySchema.parse(JSON.parse(v!))
+    );
+
+    const result = await this.kv.del(...keys);
+    await Promise.all(entities.map((e) => this.deleteIndexes(e)));
 
     await this.runHooks(hooksToRun, "after", pattern, result);
 
