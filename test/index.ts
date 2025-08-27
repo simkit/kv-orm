@@ -1,7 +1,7 @@
 import { z } from "zod";
 import crypto from "node:crypto";
 import { Redis } from "ioredis";
-import { KvOrm } from "../src/orm.ts";
+import { KvOrm } from "../src/orm/index.ts";
 
 import "@std/dotenv/load";
 
