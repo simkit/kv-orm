@@ -16,9 +16,7 @@ export class KvOrm<
   private kv: Redis;
   public readonly entitySchema: S;
 
-  // Stores hooks from the constructor
   private readonly initialHooks: KvOrmHooks<S>;
-  // Stores hooks added dynamically via `addHooks`
   private dynamicHooks: KvOrmHooks<S> = {};
 
   constructor(opts: KvOrmOptions<S>) {
@@ -40,13 +38,29 @@ export class KvOrm<
   ): Promise<void> {
     for (const hook of hooks) {
       if (!hook) continue;
-
       if (phase === "before") {
         await hook.before?.({ input });
       } else {
         await hook.after?.({ input, result: result! });
       }
     }
+  }
+
+  private async scanKeys(pattern = "*", count = 100): Promise<string[]> {
+    const keys: string[] = [];
+    let cursor = "0";
+    do {
+      const [nextCursor, batch] = await this.kv.scan(
+        cursor,
+        "MATCH",
+        `${this.prefix}:${pattern}`,
+        "COUNT",
+        count,
+      );
+      cursor = nextCursor;
+      keys.push(...batch);
+    } while (cursor !== "0");
+    return keys;
   }
 
   async create(
@@ -102,7 +116,6 @@ export class KvOrm<
     await this.runHooks(hooksToRun, "before", id);
 
     const raw = await this.kv.get(this.key(id));
-
     const entity = raw ? this.entitySchema.parse(JSON.parse(raw)) : null;
 
     await this.runHooks(hooksToRun, "after", id, entity);
@@ -122,7 +135,7 @@ export class KvOrm<
 
     await this.runHooks(hooksToRun, "before", pattern);
 
-    const keys = await this.kv.keys(`${this.prefix}:${pattern}`);
+    const keys = await this.scanKeys(pattern);
     const raws = keys.length ? await this.kv.mget(...keys) : [];
 
     const result = raws.filter(Boolean).map((v) =>
@@ -229,7 +242,7 @@ export class KvOrm<
 
     await this.runHooks(hooksToRun, "before", pattern);
 
-    const keys = await this.kv.keys(`${this.prefix}:${pattern}`);
+    const keys = await this.scanKeys(pattern);
     const result = keys.length ? await this.kv.del(...keys) : 0;
 
     await this.runHooks(hooksToRun, "after", pattern, result);
