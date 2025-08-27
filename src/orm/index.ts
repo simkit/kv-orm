@@ -7,6 +7,7 @@ import {
   KvOrmHooks,
   KvOrmMethodOptions,
   KvOrmOptions,
+  OperatorFor,
   RequiredZodFields,
 } from "../types.ts";
 import { NotFoundError } from "../errors.ts";
@@ -196,6 +197,94 @@ export class KvOrm<
     await this.runHooks(hooksToRun, "after", pattern, result);
 
     return result;
+  }
+
+  async findWhere<
+    K extends keyof z.infer<S>,
+    V extends z.infer<S>[K],
+  >(
+    field: K,
+    operator: OperatorFor<V>,
+    value: V | V[],
+    options?: KvOrmMethodOptions<
+      { field: K; operator: OperatorFor<V>; value: V | V[] },
+      z.infer<S>[]
+    >,
+  ): Promise<z.infer<S>[]> {
+    const initialHook = this.initialHooks.findWhere<K, V>?.();
+    const dynamicHook = this.dynamicHooks.findWhere<K, V>?.();
+
+    const hooksToRun = [
+      initialHook,
+      options?.hooks,
+      dynamicHook,
+    ];
+
+    const input = { field, operator, value };
+    await this.runHooks(hooksToRun, "before", input);
+
+    const allEntities = await this.getAll("*");
+
+    const results = allEntities.filter((entity) => {
+      const fieldValue = entity[field] as V;
+
+      switch (operator) {
+        case "eq":
+          return fieldValue === value;
+        case "ne":
+          return fieldValue !== value;
+        case "lt":
+          if (
+            typeof fieldValue === "string" && typeof value === "string" ||
+            typeof fieldValue === "number" && typeof value === "number" ||
+            fieldValue instanceof Date && value instanceof Date
+          ) {
+            return fieldValue < value;
+          }
+          return false;
+        case "lte":
+          if (
+            typeof fieldValue === "string" && typeof value === "string" ||
+            typeof fieldValue === "number" && typeof value === "number" ||
+            fieldValue instanceof Date && value instanceof Date
+          ) {
+            return fieldValue <= value;
+          }
+          return false;
+        case "gt":
+          if (
+            typeof fieldValue === "string" && typeof value === "string" ||
+            typeof fieldValue === "number" && typeof value === "number" ||
+            fieldValue instanceof Date && value instanceof Date
+          ) {
+            return fieldValue > value;
+          }
+          return false;
+        case "gte":
+          if (
+            typeof fieldValue === "string" && typeof value === "string" ||
+            typeof fieldValue === "number" && typeof value === "number" ||
+            fieldValue instanceof Date && value instanceof Date
+          ) {
+            return fieldValue >= value;
+          }
+          return false;
+        case "like":
+          return (
+            typeof fieldValue === "string" &&
+            typeof value === "string" &&
+            fieldValue.toLowerCase().includes(value.toLowerCase())
+          );
+        case "in":
+          return Array.isArray(value) && (value as V[]).includes(fieldValue);
+        case "nin":
+          return Array.isArray(value) && !(value as V[]).includes(fieldValue);
+      }
+    });
+
+    await this.runHooks(hooksToRun, "after", input, results);
+
+    return results;
   }
 
   async update(

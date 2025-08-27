@@ -87,9 +87,12 @@ async function run() {
   const allUsers = await usersOrm.getAll();
   console.log("All users in the database:", allUsers);
 
-  console.log("\nDeleting the user...");
-  const isDeleted = await usersOrm.delete(newUser.id);
-  console.log("User deleted:", isDeleted);
+  const filteredUsers = await usersOrm.findWhere("name", "eq", "Johnathan");
+  console.log("Filtered users in the database:", filteredUsers);
+
+  // console.log("\nDeleting the user...");
+  // const isDeleted = await usersOrm.delete(newUser.id);
+  // console.log("User deleted:", isDeleted);
 
   kv.quit();
 }
