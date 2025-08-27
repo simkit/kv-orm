@@ -51,10 +51,24 @@ const usersOrm = new KvOrm({
 });
 
 async function run() {
+  usersOrm.addHooks({
+    create: {
+      before: () => {
+        console.log("This is create before addHooks ");
+      },
+    },
+  });
+
   console.log("Creating a new user...");
   const newUser = await usersOrm.create({
     email: "john.doe@example.com",
     name: "John Doe",
+  }, {
+    hooks: {
+      before: () => {
+        console.log("create before method hook...");
+      },
+    },
   });
   console.log("New User created:", newUser);
 

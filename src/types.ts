@@ -1,7 +1,7 @@
 import z, { ZodObject, ZodRawShape } from "zod";
 import { type Redis } from "ioredis";
 
-// Required fields
+// Required fields for entities
 export type RequiredZodFields = {
   id: z.ZodDefault<z.ZodUUID>;
 
@@ -9,7 +9,7 @@ export type RequiredZodFields = {
   createdAt: z.ZodDefault<z.ZodISODateTime>;
 };
 
-// ORM options
+// ORM options for the constructor
 export interface KvOrmOptions<
   S extends ZodObject<ZodRawShape> & { shape: RequiredZodFields },
 > {
@@ -17,6 +17,11 @@ export interface KvOrmOptions<
   kv: Redis;
   schema: S;
   hooks?: KvOrmHooks<S>;
+}
+
+// ORM options for individual methods. Now generic.
+export interface KvOrmMethodOptions<Input, Result> {
+  hooks?: Hooks<Input, Result>;
 }
 
 // Hook Args

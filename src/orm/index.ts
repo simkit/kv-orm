@@ -3,93 +3,133 @@ import { z, ZodObject, ZodRawShape } from "zod";
 import {
   Hooks,
   KvOrmHooks,
+  KvOrmMethodOptions,
   KvOrmOptions,
   RequiredZodFields,
 } from "../types.ts";
 import { NotFoundError } from "../errors.ts";
 
-// Redis ORM
 export class KvOrm<
   S extends ZodObject<ZodRawShape> & { shape: RequiredZodFields },
 > {
   private prefix: string;
   private kv: Redis;
   public readonly entitySchema: S;
-  private hooks: KvOrmHooks<S>;
+
+  // Stores hooks from the constructor
+  private readonly initialHooks: KvOrmHooks<S>;
+  // Stores hooks added dynamically via `addHooks`
+  private dynamicHooks: KvOrmHooks<S> = {};
 
   constructor(opts: KvOrmOptions<S>) {
     this.prefix = opts.prefix;
     this.kv = opts.kv;
     this.entitySchema = opts.schema;
-    this.hooks = opts.hooks ?? {};
+    this.initialHooks = opts.hooks ?? {};
   }
 
-  private key(id: string) {
+  private key(id: string): string {
     return `${this.prefix}:${id}`;
   }
 
-  private async runHook<Input, Result>(
-    hook: Hooks<Input, Result> | undefined,
+  private async runHooks<Input, Result>(
+    hooks: Array<Hooks<Input, Result> | undefined>,
     phase: "before" | "after",
     input: Input,
     result?: Result,
-  ) {
-    if (!hook) return;
+  ): Promise<void> {
+    for (const hook of hooks) {
+      if (!hook) continue;
 
-    if (phase === "before") {
-      await hook.before?.({ input });
-    } else {
-      await hook.after?.({ input, result: result! });
+      if (phase === "before") {
+        await hook.before?.({ input });
+      } else {
+        await hook.after?.({ input, result: result! });
+      }
     }
   }
 
-  async get(id: string): Promise<z.infer<S>> {
-    await this.runHook(this.hooks.get, "before", id);
+  async create(
+    data: z.input<S>,
+    options?: KvOrmMethodOptions<z.input<S>, z.infer<S>>,
+  ): Promise<z.infer<S>> {
+    const hooksToRun = [
+      this.initialHooks.create,
+      options?.hooks,
+      this.dynamicHooks.create,
+    ];
+
+    await this.runHooks(hooksToRun, "before", data);
+
+    const parsed = this.entitySchema.parse(data);
+    await this.kv.set(this.key(parsed.id as string), JSON.stringify(parsed));
+
+    await this.runHooks(hooksToRun, "after", data, parsed);
+
+    return parsed;
+  }
+
+  async get(
+    id: string,
+    options?: KvOrmMethodOptions<string, z.infer<S>>,
+  ): Promise<z.infer<S>> {
+    const hooksToRun = [
+      this.initialHooks.get,
+      options?.hooks,
+      this.dynamicHooks.get,
+    ];
+
+    await this.runHooks(hooksToRun, "before", id);
 
     const entity = await this.maybeGet(id);
     if (!entity) throw new NotFoundError(this.prefix, id);
 
-    await this.runHook(this.hooks.get, "after", id, entity);
+    await this.runHooks(hooksToRun, "after", id, entity);
 
     return entity;
   }
 
-  async maybeGet(id: string): Promise<z.infer<S> | null> {
-    await this.runHook(this.hooks.maybeGet, "before", id);
+  async maybeGet(
+    id: string,
+    options?: KvOrmMethodOptions<string, z.infer<S> | null>,
+  ): Promise<z.infer<S> | null> {
+    const hooksToRun = [
+      this.initialHooks.maybeGet,
+      options?.hooks,
+      this.dynamicHooks.maybeGet,
+    ];
+
+    await this.runHooks(hooksToRun, "before", id);
 
     const raw = await this.kv.get(this.key(id));
 
     const entity = raw ? this.entitySchema.parse(JSON.parse(raw)) : null;
 
-    await this.runHook(this.hooks.maybeGet, "after", id, entity);
+    await this.runHooks(hooksToRun, "after", id, entity);
 
     return entity;
   }
 
-  async create(data: z.input<S>): Promise<z.infer<S>> {
-    await this.runHook(this.hooks.create, "before", data);
+  async getAll(
+    pattern = "*",
+    options?: KvOrmMethodOptions<string, z.infer<S>[]>,
+  ): Promise<z.infer<S>[]> {
+    const hooksToRun = [
+      this.initialHooks.getAll,
+      options?.hooks,
+      this.dynamicHooks.getAll,
+    ];
 
-    const parsed = this.entitySchema.parse(data);
-
-    await this.kv.set(this.key(parsed.id as string), JSON.stringify(parsed));
-
-    await this.runHook(this.hooks.create, "after", data, parsed);
-
-    return parsed;
-  }
-
-  async getAll(pattern = "*"): Promise<z.infer<S>[]> {
-    await this.runHook(this.hooks.getAll, "before", pattern);
+    await this.runHooks(hooksToRun, "before", pattern);
 
     const keys = await this.kv.keys(`${this.prefix}:${pattern}`);
-
     const raws = keys.length ? await this.kv.mget(...keys) : [];
 
     const result = raws.filter(Boolean).map((v) =>
       this.entitySchema.parse(JSON.parse(v!))
     );
 
-    await this.runHook(this.hooks.getAll, "after", pattern, result);
+    await this.runHooks(hooksToRun, "after", pattern, result);
 
     return result;
   }
@@ -97,8 +137,19 @@ export class KvOrm<
   async update(
     id: string,
     patch: Partial<z.input<S>>,
+    options?: KvOrmMethodOptions<
+      { id: string; patch: Partial<z.input<S>> },
+      z.infer<S> | null
+    >,
   ): Promise<z.infer<S> | null> {
-    await this.runHook(this.hooks.update, "before", { id, patch });
+    const hooksToRun = [
+      this.initialHooks.update,
+      options?.hooks,
+      this.dynamicHooks.update,
+    ];
+    const input = { id, patch };
+
+    await this.runHooks(hooksToRun, "before", input);
 
     const existing = await this.maybeGet(id);
     if (!existing) return null;
@@ -111,7 +162,7 @@ export class KvOrm<
 
     await this.kv.set(this.key(updated.id as string), JSON.stringify(updated));
 
-    await this.runHook(this.hooks.update, "after", { id, patch }, updated);
+    await this.runHooks(hooksToRun, "after", input, updated);
 
     return updated;
   }
@@ -119,8 +170,19 @@ export class KvOrm<
   async updateOrFail(
     id: string,
     patch: Partial<z.input<S>>,
+    options?: KvOrmMethodOptions<
+      { id: string; patch: Partial<z.input<S>> },
+      z.infer<S>
+    >,
   ): Promise<z.infer<S>> {
-    await this.runHook(this.hooks.updateOrFail, "before", { id, patch });
+    const hooksToRun = [
+      this.initialHooks.updateOrFail,
+      options?.hooks,
+      this.dynamicHooks.updateOrFail,
+    ];
+    const input = { id, patch };
+
+    await this.runHooks(hooksToRun, "before", input);
 
     const existing = await this.get(id);
 
@@ -132,38 +194,50 @@ export class KvOrm<
 
     await this.kv.set(this.key(updated.id as string), JSON.stringify(updated));
 
-    await this.runHook(
-      this.hooks.updateOrFail,
-      "after",
-      { id, patch },
-      updated,
-    );
+    await this.runHooks(hooksToRun, "after", input, updated);
     return updated;
   }
 
-  async delete(id: string): Promise<boolean> {
-    await this.runHook(this.hooks.delete, "before", id);
+  async delete(
+    id: string,
+    options?: KvOrmMethodOptions<string, boolean>,
+  ): Promise<boolean> {
+    const hooksToRun = [
+      this.initialHooks.delete,
+      options?.hooks,
+      this.dynamicHooks.delete,
+    ];
+
+    await this.runHooks(hooksToRun, "before", id);
 
     const result = (await this.kv.del(this.key(id))) === 1;
 
-    await this.runHook(this.hooks.delete, "after", id, result);
+    await this.runHooks(hooksToRun, "after", id, result);
 
     return result;
   }
 
-  async deleteAll(pattern = "*"): Promise<number> {
-    await this.runHook(this.hooks.deleteAll, "before", pattern);
+  async deleteAll(
+    pattern = "*",
+    options?: KvOrmMethodOptions<string, number>,
+  ): Promise<number> {
+    const hooksToRun = [
+      this.initialHooks.deleteAll,
+      options?.hooks,
+      this.dynamicHooks.deleteAll,
+    ];
+
+    await this.runHooks(hooksToRun, "before", pattern);
 
     const keys = await this.kv.keys(`${this.prefix}:${pattern}`);
-
     const result = keys.length ? await this.kv.del(...keys) : 0;
 
-    await this.runHook(this.hooks.deleteAll, "after", pattern, result);
+    await this.runHooks(hooksToRun, "after", pattern, result);
 
     return result;
   }
 
   addHooks(hooks: KvOrmHooks<S>) {
-    Object.assign(this.hooks, hooks);
+    Object.assign(this.dynamicHooks, hooks);
   }
 }
