@@ -1,26 +1,13 @@
 import { type Redis } from "ioredis";
 import { z, ZodObject, ZodRawShape } from "zod";
-import { HookArgs, Hooks, KvOrmHooks } from "../types.ts";
+import {
+  HookArgs,
+  Hooks,
+  KvOrmHooks,
+  KvOrmOptions,
+  RequiredZodFields,
+} from "../types.ts";
 import { NotFoundError } from "../errors.ts";
-
-// Required fields
-export type RequiredZodFields = {
-  id: z.ZodDefault<z.ZodUUID>;
-
-  updatedAt: z.ZodDefault<z.ZodISODateTime>;
-  createdAt: z.ZodDefault<z.ZodISODateTime>;
-};
-
-// ORM options
-export interface KvOrmOptions<
-  S extends ZodObject<ZodRawShape> & {
-    shape: RequiredZodFields;
-  },
-> {
-  prefix: string;
-  kv: Redis;
-  schema: S;
-}
 
 // Redis ORM
 export class KvOrm<
@@ -31,11 +18,11 @@ export class KvOrm<
   public readonly entitySchema: S;
   private hooks: KvOrmHooks<S> = {};
 
-  constructor(opts: KvOrmOptions<S>, hooks?: KvOrmHooks<S>) {
+  constructor(opts: KvOrmOptions<S>) {
     this.prefix = opts.prefix;
     this.kv = opts.kv;
     this.entitySchema = opts.schema;
-    if (hooks) this.hooks = hooks;
+    if (opts.hooks) this.hooks = opts.hooks;
   }
 
   private key(id: string) {

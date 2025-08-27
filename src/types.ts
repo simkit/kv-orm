@@ -1,16 +1,40 @@
 import z, { ZodObject, ZodRawShape } from "zod";
+import { type Redis } from "ioredis";
 
+// Required fields
+export type RequiredZodFields = {
+  id: z.ZodDefault<z.ZodUUID>;
+
+  updatedAt: z.ZodDefault<z.ZodISODateTime>;
+  createdAt: z.ZodDefault<z.ZodISODateTime>;
+};
+
+// ORM options
+export interface KvOrmOptions<
+  S extends ZodObject<ZodRawShape> & { shape: RequiredZodFields },
+> {
+  prefix: string;
+  kv: Redis;
+  schema: S;
+  hooks?: KvOrmHooks<S>;
+}
+
+// Hook Args
 export type HookArgs<Input, Result> = {
   input: Input;
   result?: Result;
 };
 
+// Hooks
 export type Hooks<Input, Result> = {
   before?: (args: HookArgs<Input, Result>) => Promise<void> | void;
   after?: (args: HookArgs<Input, Result>) => Promise<void> | void;
 };
 
-export type KvOrmHooks<S extends ZodObject<ZodRawShape>> = {
+// ORM Hooks
+export type KvOrmHooks<
+  S extends ZodObject<ZodRawShape> & { shape: RequiredZodFields },
+> = {
   get?: Hooks<string, z.infer<S>>;
   maybeGet?: Hooks<string, z.infer<S> | null>;
   getAll?: Hooks<string, z.infer<S>[]>;

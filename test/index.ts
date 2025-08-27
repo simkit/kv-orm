@@ -19,6 +19,35 @@ const usersOrm = new KvOrm({
   prefix: "users",
   kv,
   schema: userSchema,
+  hooks: {
+    create: {
+      before: ({ input }) => console.log("[HOOK] Before create:", input),
+      after: ({ result }) => console.log("[HOOK] After create:", result),
+    },
+    get: {
+      before: ({ input }) => console.log("[HOOK] Before get:", input),
+      after: ({ input, result }) =>
+        console.log("[HOOK] After get:", input, "->", result),
+    },
+    update: {
+      before: ({ input }) =>
+        console.log("[HOOK] Before update:", input, "result"),
+      after: ({ result }) => console.log("[HOOK] After update:", result),
+    },
+    delete: {
+      before: ({ input }) => console.log("[HOOK] Before delete:", input),
+      after: ({ result }) => console.log("[HOOK] After delete:", result),
+    },
+    getAll: {
+      before: ({ input }) => console.log("[HOOK] Before getAll:", input),
+      after: ({ result }) => console.log("[HOOK] After getAll:", result),
+    },
+    deleteAll: {
+      before: ({ input }) => console.log("[HOOK] Before deleteAll:", input),
+      after: ({ result }) =>
+        console.log("[HOOK] After deleteAll, deleted keys:", result),
+    },
+  },
 });
 
 async function run() {
@@ -44,9 +73,9 @@ async function run() {
   const allUsers = await usersOrm.getAll();
   console.log("All users in the database:", allUsers);
 
-  // console.log("\nDeleting the user...");
-  // const isDeleted = await usersOrm.delete(newUser.id);
-  // console.log("User deleted:", isDeleted);
+  console.log("\nDeleting the user...");
+  const isDeleted = await usersOrm.delete(newUser.id);
+  console.log("User deleted:", isDeleted);
 
   kv.quit();
 }
