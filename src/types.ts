@@ -20,15 +20,13 @@ export interface KvOrmOptions<
 }
 
 // Hook Args
-export type HookArgs<Input, Result> = {
-  input: Input;
-  result?: Result;
-};
+export type BeforeHookArgs<Input> = { input: Input };
+export type AfterHookArgs<Input, Result> = { input: Input; result: Result };
 
-// Hooks
+// Hooks type
 export type Hooks<Input, Result> = {
-  before?: (args: HookArgs<Input, Result>) => Promise<void> | void;
-  after?: (args: HookArgs<Input, Result>) => Promise<void> | void;
+  before?: (args: BeforeHookArgs<Input>) => Promise<void> | void;
+  after?: (args: AfterHookArgs<Input, Result>) => Promise<void> | void;
 };
 
 // ORM Hooks
