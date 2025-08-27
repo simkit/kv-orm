@@ -1,6 +1,6 @@
 {
   "tasks": {
-    "dev": "deno run -A test.ts"
+    "dev": "deno run --allow-env --allow-net --allow-read test/index.ts"
   },
   "imports": {
     "@std/dotenv": "jsr:@std/dotenv@^0.225.5",
