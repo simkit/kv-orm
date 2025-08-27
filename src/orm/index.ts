@@ -1,5 +1,7 @@
 import { type Redis } from "ioredis";
 import { z, ZodObject, ZodRawShape } from "zod";
+import { randomUUID } from "node:crypto";
+
 import {
   Hooks,
   KvOrmHooks,
@@ -63,6 +65,30 @@ export class KvOrm<
     return keys;
   }
 
+  private normalizeEntity(
+    data: z.input<S> | z.infer<S>,
+    isNew = true,
+  ): z.infer<S> {
+    let id: string;
+    if ("id" in data && data.id) {
+      if (!z.uuid().safeParse(data.id).success) {
+        throw new Error(`Invalid UUID provided for id: ${data.id}`);
+      }
+      id = data.id as string;
+    } else {
+      id = randomUUID();
+    }
+
+    const now = new Date().toISOString();
+
+    return this.entitySchema.parse({
+      ...data,
+      id,
+      createdAt: isNew ? now : data.createdAt ?? now,
+      updatedAt: now,
+    });
+  }
+
   async create(
     data: z.input<S>,
     options?: KvOrmMethodOptions<z.input<S>, z.infer<S>>,
@@ -72,15 +98,14 @@ export class KvOrm<
       options?.hooks,
       this.dynamicHooks.create,
     ];
-
     await this.runHooks(hooksToRun, "before", data);
 
-    const parsed = this.entitySchema.parse(data);
-    await this.kv.set(this.key(parsed.id as string), JSON.stringify(parsed));
+    const entity = this.normalizeEntity(data);
+    await this.kv.set(this.key(entity.id as string), JSON.stringify(entity));
 
-    await this.runHooks(hooksToRun, "after", data, parsed);
+    await this.runHooks(hooksToRun, "after", data, entity);
 
-    return parsed;
+    return entity;
   }
 
   async createBulk(
@@ -92,23 +117,21 @@ export class KvOrm<
       options?.hooks,
       this.dynamicHooks.createBulk,
     ];
-
     await this.runHooks(hooksToRun, "before", data);
 
-    const parsedEntities = data.map((d) => this.entitySchema.parse(d));
-
-    const kvPairs: string[] = [];
-    for (const entity of parsedEntities) {
-      kvPairs.push(this.key(entity.id as string), JSON.stringify(entity));
-    }
+    const entities = data.map((d) => this.normalizeEntity(d));
+    const kvPairs = entities.flatMap((entity) => [
+      this.key(entity.id as string),
+      JSON.stringify(entity),
+    ]);
 
     if (kvPairs.length > 0) {
       await this.kv.mset(...kvPairs);
     }
 
-    await this.runHooks(hooksToRun, "after", data, parsedEntities);
+    await this.runHooks(hooksToRun, "after", data, entities);
 
-    return parsedEntities;
+    return entities;
   }
 
   async get(
@@ -195,11 +218,7 @@ export class KvOrm<
     const existing = await this.maybeGet(id);
     if (!existing) return null;
 
-    const updated = this.entitySchema.parse({
-      ...existing,
-      ...patch,
-      updatedAt: new Date().toISOString(),
-    });
+    const updated = this.normalizeEntity({ ...existing, ...patch }, false);
 
     await this.kv.set(this.key(updated.id as string), JSON.stringify(updated));
 
@@ -227,15 +246,12 @@ export class KvOrm<
 
     const existing = await this.get(id);
 
-    const updated = this.entitySchema.parse({
-      ...existing,
-      ...patch,
-      updatedAt: new Date().toISOString(),
-    });
+    const updated = this.normalizeEntity({ ...existing, ...patch }, false);
 
     await this.kv.set(this.key(updated.id as string), JSON.stringify(updated));
 
     await this.runHooks(hooksToRun, "after", input, updated);
+
     return updated;
   }
 
