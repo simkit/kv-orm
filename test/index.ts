@@ -105,12 +105,17 @@ async function run() {
   console.log(
     "\nSearching for users created in a specific time range (using index)...",
   );
+  const recentUsers = await usersOrm.findWhere(
+    "createdAt",
+    "gte",
+    new Date("2024-01-01T00:00:00.000Z").toISOString(),
+  );
   // const recentUsers = await usersOrm.findWhere(
-  //   "createdAt",
-  //   "gt",
-  //   new Date("2024-01-01T00:00:00.000Z").toISOString(),
+  //   "name",
+  //   "eq",
+  //   "Doe",
   // );
-  // console.log("Found recent users:", recentUsers);
+  console.log("Found recent users:", recentUsers);
 
   console.log("\nRetrieving all users...");
   const allUsers = await usersOrm.getAll();

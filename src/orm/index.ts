@@ -202,9 +202,13 @@ export class KvOrm<
       ) {
         const score = (value instanceof Date)
           ? value.getTime()
+          : (typeof value === "string")
+          ? new Date(value).getTime()
           : value as number;
+
         if (
-          score !== undefined && score !== null && typeof score === "number"
+          !isNaN(score) && score !== undefined && score !== null &&
+          typeof score === "number"
         ) {
           multi.zadd(this.zsetIndexKey(fieldKey), score, id);
         }
@@ -317,7 +321,10 @@ export class KvOrm<
         }
       }
     } else if (indexType === "zset") {
-      const val = (value instanceof Date) ? value.getTime() : value as number;
+      const val = (value instanceof Date ||
+          (typeof value === "string" && !isNaN(new Date(value).getTime())))
+        ? new Date(value as string).getTime()
+        : Number(value);
       const start = "-inf";
       const end = "+inf";
 
