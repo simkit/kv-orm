@@ -69,3 +69,43 @@ export type OperatorFor<T> = T extends number | Date
   : T extends string
     ? "eq" | "ne" | "lt" | "lte" | "gt" | "gte" | "like" | "in" | "nin"
   : "eq" | "ne" | "in" | "nin";
+
+// ORM Context
+export interface KvOrmContext<
+  S extends ZodObject<ZodRawShape> & { shape: RequiredZodFields },
+> {
+  prefix: string;
+  kv: Redis;
+  entitySchema: S;
+  initialHooks: KvOrmHooks<S>;
+  dynamicHooks: KvOrmHooks<S>;
+  indexedFields: { [K in keyof z.infer<S>]?: "set" | "zset" };
+
+  runHooks<Input, Result>(
+    hooks: Array<KvOrmMethodOptions<Input, Result>["hooks"] | undefined>,
+    phase: "before" | "after",
+    input: Input,
+    result?: Result,
+  ): Promise<void>;
+
+  key(id: string): string;
+  setIndexKey<K extends keyof z.infer<S>>(
+    field: K,
+    value: z.infer<S>[K],
+  ): string;
+  zsetIndexKey(field: keyof z.infer<S>): string;
+  scanKeys(pattern?: string, count?: number): Promise<string[]>;
+  updateIndexes(
+    multi: ReturnType<Redis["multi"]>,
+    entity: z.infer<S>,
+    isUpdate?: boolean,
+    oldEntity?: z.infer<S>,
+  ): void;
+  deleteIndexes(multi: ReturnType<Redis["multi"]>, entity: z.infer<S>): void;
+  normalizeEntity(data: z.input<S> | z.infer<S>, isNew?: boolean): z.infer<S>;
+  findWhereIndexed<K extends keyof z.infer<S>, V extends z.infer<S>[K]>(
+    field: K,
+    operator: OperatorFor<V>,
+    value: V | V[],
+  ): Promise<string[]>;
+}

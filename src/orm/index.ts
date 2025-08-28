@@ -3,26 +3,32 @@ import { z, ZodObject, ZodRawShape } from "zod";
 import { randomUUID } from "node:crypto";
 
 import {
-  Hooks,
+  KvOrmContext,
   KvOrmHooks,
   KvOrmMethodOptions,
   KvOrmOptions,
   OperatorFor,
   RequiredZodFields,
 } from "../types.ts";
-import { NotFoundError } from "../errors.ts";
+
+import { create, createBulk } from "./methods/create.ts";
+import { get, getAll, maybeGet } from "./methods/get.ts";
+import { update, updateOrFail } from "./methods/update.ts";
+import { deleteAll, deleteEntity } from "./methods/delete.ts";
+import { findWhere } from "./methods/find.ts";
 
 export class KvOrm<
   S extends ZodObject<ZodRawShape> & { shape: RequiredZodFields },
 > {
-  private prefix: string;
-  private kv: Redis;
+  public prefix: string;
+  public kv: Redis;
   public readonly entitySchema: S;
+  public readonly initialHooks: KvOrmHooks<S>;
+  public dynamicHooks: KvOrmHooks<S> = {};
 
-  private readonly initialHooks: KvOrmHooks<S>;
-  private dynamicHooks: KvOrmHooks<S> = {};
+  public indexedFields: { [K in keyof z.infer<S>]?: "set" | "zset" };
 
-  private indexedFields: { [K in keyof z.infer<S>]?: "set" | "zset" };
+  private readonly context: KvOrmContext<S>;
 
   constructor(opts: KvOrmOptions<S>) {
     this.prefix = opts.prefix;
@@ -30,6 +36,95 @@ export class KvOrm<
     this.entitySchema = opts.schema;
     this.initialHooks = opts.hooks ?? {};
     this.indexedFields = opts.indexedFields ?? {};
+
+    // for internal methods
+    this.context = {
+      prefix: this.prefix,
+      kv: this.kv,
+      entitySchema: this.entitySchema,
+      initialHooks: this.initialHooks,
+      dynamicHooks: this.dynamicHooks,
+      indexedFields: this.indexedFields,
+      runHooks: this.runHooks.bind(this),
+      key: this.key.bind(this),
+      setIndexKey: this.setIndexKey.bind(this),
+      zsetIndexKey: this.zsetIndexKey.bind(this),
+      scanKeys: this.scanKeys.bind(this),
+      updateIndexes: this.updateIndexes.bind(this),
+      deleteIndexes: this.deleteIndexes.bind(this),
+      normalizeEntity: this.normalizeEntity.bind(this),
+      findWhereIndexed: this.findWhereIndexed.bind(this),
+    };
+  }
+
+  public create = (
+    data: z.input<S>,
+    options?: KvOrmMethodOptions<z.input<S>, z.infer<S>>,
+  ) => create(this.context, data, options);
+
+  public createBulk = (
+    data: z.input<S>[],
+    options?: KvOrmMethodOptions<z.input<S>[], z.infer<S>[]>,
+  ) => createBulk(this.context, data, options);
+
+  public get = (
+    id: string,
+    options?: KvOrmMethodOptions<string, z.infer<S>>,
+  ) => get(this.context, id, options);
+
+  public maybeGet = (
+    id: string,
+    options?: KvOrmMethodOptions<string, z.infer<S> | null>,
+  ) => maybeGet(this.context, id, options);
+
+  public getAll = (
+    pattern = "*",
+    options?: KvOrmMethodOptions<string, z.infer<S>[]>,
+  ) => getAll(this.context, pattern, options);
+
+  public findWhere = <
+    K extends keyof z.infer<S>,
+    V extends z.infer<S>[K],
+  >(
+    field: K,
+    operator: OperatorFor<V>,
+    value: V | V[],
+    options?: KvOrmMethodOptions<
+      { field: K; operator: OperatorFor<V>; value: V | V[] },
+      z.infer<S>[]
+    >,
+  ) => findWhere(this.context, field, operator, value, options);
+
+  public update = (
+    id: string,
+    patch: Partial<z.input<S>>,
+    options?: KvOrmMethodOptions<
+      { id: string; patch: Partial<z.input<S>> },
+      z.infer<S> | null
+    >,
+  ) => update(this.context, id, patch, options);
+
+  public updateOrFail = (
+    id: string,
+    patch: Partial<z.input<S>>,
+    options?: KvOrmMethodOptions<
+      { id: string; patch: Partial<z.input<S>> },
+      z.infer<S>
+    >,
+  ) => updateOrFail(this.context, id, patch, options);
+
+  public delete = (
+    id: string,
+    options?: KvOrmMethodOptions<string, boolean>,
+  ) => deleteEntity(this.context, id, options);
+
+  public deleteAll = (
+    pattern = "*",
+    options?: KvOrmMethodOptions<string, number>,
+  ) => deleteAll(this.context, pattern, options);
+
+  public addHooks(hooks: KvOrmHooks<S>) {
+    Object.assign(this.dynamicHooks, hooks);
   }
 
   private key(id: string): string {
@@ -48,7 +143,7 @@ export class KvOrm<
   }
 
   private async runHooks<Input, Result>(
-    hooks: Array<Hooks<Input, Result> | undefined>,
+    hooks: Array<KvOrmMethodOptions<Input, Result>["hooks"] | undefined>,
     phase: "before" | "after",
     input: Input,
     result?: Result,
@@ -117,6 +212,29 @@ export class KvOrm<
     }
   }
 
+  private deleteIndexes(
+    multi: ReturnType<Redis["multi"]>,
+    entity: z.infer<S>,
+  ): void {
+    for (const field in this.indexedFields) {
+      const fieldKey = field as keyof z.infer<S>;
+      const indexType = this.indexedFields[fieldKey];
+      const value = entity[fieldKey];
+      const id = entity.id as string;
+
+      if (indexType === "set") {
+        if (value !== undefined && value !== null) {
+          multi.srem(
+            this.setIndexKey(fieldKey, value as z.infer<S>[keyof z.infer<S>]),
+            id,
+          );
+        }
+      } else if (indexType === "zset") {
+        multi.zrem(this.zsetIndexKey(fieldKey), id);
+      }
+    }
+  }
+
   private normalizeEntity(
     data: z.input<S> | z.infer<S>,
     isNew = true,
@@ -139,119 +257,6 @@ export class KvOrm<
       createdAt: isNew ? now : data.createdAt ?? now,
       updatedAt: now,
     });
-  }
-
-  async create(
-    data: z.input<S>,
-    options?: KvOrmMethodOptions<z.input<S>, z.infer<S>>,
-  ): Promise<z.infer<S>> {
-    const hooksToRun = [
-      this.initialHooks.create,
-      options?.hooks,
-      this.dynamicHooks.create,
-    ];
-    await this.runHooks(hooksToRun, "before", data);
-
-    const entity = this.normalizeEntity(data);
-
-    // Start a Redis transaction to ensure atomicity
-    const multi = this.kv.multi();
-    multi.set(this.key(entity.id as string), JSON.stringify(entity));
-    this.updateIndexes(multi, entity);
-    await multi.exec();
-
-    await this.runHooks(hooksToRun, "after", data, entity);
-
-    return entity;
-  }
-
-  async createBulk(
-    data: z.input<S>[],
-    options?: KvOrmMethodOptions<z.input<S>[], z.infer<S>[]>,
-  ): Promise<z.infer<S>[]> {
-    const hooksToRun = [
-      this.initialHooks.createBulk,
-      options?.hooks,
-      this.dynamicHooks.createBulk,
-    ];
-    await this.runHooks(hooksToRun, "before", data);
-
-    const entities = data.map((d) => this.normalizeEntity(d));
-
-    const multi = this.kv.multi();
-    for (const entity of entities) {
-      multi.set(this.key(entity.id as string), JSON.stringify(entity));
-      this.updateIndexes(multi, entity);
-    }
-    await multi.exec();
-
-    await this.runHooks(hooksToRun, "after", data, entities);
-
-    return entities;
-  }
-
-  async get(
-    id: string,
-    options?: KvOrmMethodOptions<string, z.infer<S>>,
-  ): Promise<z.infer<S>> {
-    const hooksToRun = [
-      this.initialHooks.get,
-      options?.hooks,
-      this.dynamicHooks.get,
-    ];
-
-    await this.runHooks(hooksToRun, "before", id);
-
-    const entity = await this.maybeGet(id);
-    if (!entity) throw new NotFoundError(this.prefix, id);
-
-    await this.runHooks(hooksToRun, "after", id, entity);
-
-    return entity;
-  }
-
-  async maybeGet(
-    id: string,
-    options?: KvOrmMethodOptions<string, z.infer<S> | null>,
-  ): Promise<z.infer<S> | null> {
-    const hooksToRun = [
-      this.initialHooks.maybeGet,
-      options?.hooks,
-      this.dynamicHooks.maybeGet,
-    ];
-
-    await this.runHooks(hooksToRun, "before", id);
-
-    const raw = await this.kv.get(this.key(id));
-    const entity = raw ? this.entitySchema.parse(JSON.parse(raw)) : null;
-
-    await this.runHooks(hooksToRun, "after", id, entity);
-
-    return entity;
-  }
-
-  async getAll(
-    pattern = "*",
-    options?: KvOrmMethodOptions<string, z.infer<S>[]>,
-  ): Promise<z.infer<S>[]> {
-    const hooksToRun = [
-      this.initialHooks.getAll,
-      options?.hooks,
-      this.dynamicHooks.getAll,
-    ];
-
-    await this.runHooks(hooksToRun, "before", pattern);
-
-    const keys = await this.scanKeys(pattern);
-    const raws = keys.length ? await this.kv.mget(...keys) : [];
-
-    const result = raws.filter(Boolean).map((v) =>
-      this.entitySchema.parse(JSON.parse(v!))
-    );
-
-    await this.runHooks(hooksToRun, "after", pattern, result);
-
-    return result;
   }
 
   private async findWhereIndexed<
@@ -349,290 +354,5 @@ export class KvOrm<
     }
 
     return ids;
-  }
-
-  async findWhere<
-    K extends keyof z.infer<S>,
-    V extends z.infer<S>[K],
-  >(
-    field: K,
-    operator: OperatorFor<V>,
-    value: V | V[],
-    options?: KvOrmMethodOptions<
-      { field: K; operator: OperatorFor<V>; value: V | V[] },
-      z.infer<S>[]
-    >,
-  ): Promise<z.infer<S>[]> {
-    const initialHook = this.initialHooks.findWhere<K, V>?.();
-    const dynamicHook = this.dynamicHooks.findWhere<K, V>?.();
-
-    const hooksToRun = [
-      initialHook,
-      options?.hooks,
-      dynamicHook,
-    ];
-
-    const input = { field, operator, value };
-    await this.runHooks(hooksToRun, "before", input);
-
-    let ids: string[] = [];
-    const indexType = this.indexedFields[field];
-
-    if (indexType) {
-      const supportedBySet = ["eq", "ne", "in", "nin"].includes(operator);
-      const supportedByZset = ["lt", "lte", "gt", "gte", "in"].includes(
-        operator,
-      );
-
-      if (
-        (indexType === "set" && supportedBySet) ||
-        (indexType === "zset" && supportedByZset)
-      ) {
-        ids = await this.findWhereIndexed(field, operator, value);
-      }
-    }
-
-    if (!ids.length && (!indexType || ["like"].includes(operator))) {
-      const allEntities = await this.getAll("*");
-      const results = allEntities.filter((entity) => {
-        const fieldValue = entity[field] as V;
-
-        switch (operator) {
-          case "eq":
-            return fieldValue === value;
-          case "ne":
-            return fieldValue !== value;
-          case "lt":
-            if (
-              typeof fieldValue === "string" && typeof value === "string" ||
-              typeof fieldValue === "number" && typeof value === "number" ||
-              fieldValue instanceof Date && value instanceof Date
-            ) {
-              return fieldValue < value;
-            }
-            return false;
-          case "lte":
-            if (
-              typeof fieldValue === "string" && typeof value === "string" ||
-              typeof fieldValue === "number" && typeof value === "number" ||
-              fieldValue instanceof Date && value instanceof Date
-            ) {
-              return fieldValue <= value;
-            }
-            return false;
-          case "gt":
-            if (
-              typeof fieldValue === "string" && typeof value === "string" ||
-              typeof fieldValue === "number" && typeof value === "number" ||
-              fieldValue instanceof Date && value instanceof Date
-            ) {
-              return fieldValue > value;
-            }
-            return false;
-          case "gte":
-            if (
-              typeof fieldValue === "string" && typeof value === "string" ||
-              typeof fieldValue === "number" && typeof value === "number" ||
-              fieldValue instanceof Date && value instanceof Date
-            ) {
-              return fieldValue >= value;
-            }
-            return false;
-          case "like":
-            return (
-              typeof fieldValue === "string" &&
-              typeof value === "string" &&
-              fieldValue.toLowerCase().includes(value.toLowerCase())
-            );
-          case "in":
-            return Array.isArray(value) && (value as V[]).includes(fieldValue);
-          case "nin":
-            return Array.isArray(value) && !(value as V[]).includes(fieldValue);
-        }
-      });
-      await this.runHooks(hooksToRun, "after", input, results);
-      return results;
-    }
-
-    const raws = ids.length
-      ? await this.kv.mget(...ids.map((id) => this.key(id)))
-      : [];
-    const result = raws.filter(Boolean).map((v) =>
-      this.entitySchema.parse(JSON.parse(v!))
-    );
-
-    await this.runHooks(hooksToRun, "after", input, result);
-    return result;
-  }
-
-  async update(
-    id: string,
-    patch: Partial<z.input<S>>,
-    options?: KvOrmMethodOptions<
-      { id: string; patch: Partial<z.input<S>> },
-      z.infer<S> | null
-    >,
-  ): Promise<z.infer<S> | null> {
-    const hooksToRun = [
-      this.initialHooks.update,
-      options?.hooks,
-      this.dynamicHooks.update,
-    ];
-    const input = { id, patch };
-
-    await this.runHooks(hooksToRun, "before", input);
-
-    await this.kv.watch(this.key(id));
-    const existing = await this.maybeGet(id);
-
-    if (!existing) {
-      await this.kv.unwatch();
-      return null;
-    }
-
-    const updated = this.normalizeEntity({ ...existing, ...patch }, false);
-
-    const multi = this.kv.multi();
-    multi.set(this.key(updated.id as string), JSON.stringify(updated));
-    this.updateIndexes(multi, updated, true, existing);
-
-    const results = await multi.exec();
-
-    if (results === null) {
-      return null;
-    }
-
-    await this.runHooks(hooksToRun, "after", input, updated);
-
-    return updated;
-  }
-
-  async updateOrFail(
-    id: string,
-    patch: Partial<z.input<S>>,
-    options?: KvOrmMethodOptions<
-      { id: string; patch: Partial<z.input<S>> },
-      z.infer<S>
-    >,
-  ): Promise<z.infer<S>> {
-    const hooksToRun = [
-      this.initialHooks.updateOrFail,
-      options?.hooks,
-      this.dynamicHooks.updateOrFail,
-    ];
-    const input = { id, patch };
-
-    await this.runHooks(hooksToRun, "before", input);
-
-    await this.kv.watch(this.key(id));
-    const existing = await this.get(id);
-
-    const updated = this.normalizeEntity({ ...existing, ...patch }, false);
-
-    const multi = this.kv.multi();
-    multi.set(this.key(updated.id as string), JSON.stringify(updated));
-    this.updateIndexes(multi, updated, true, existing);
-
-    const results = await multi.exec();
-
-    if (results === null) {
-      throw new Error(
-        `Optimistic locking failed for key: ${
-          this.key(id)
-        }. Please retry the operation.`,
-      );
-    }
-
-    await this.runHooks(hooksToRun, "after", input, updated);
-
-    return updated;
-  }
-
-  private deleteIndexes(
-    multi: ReturnType<Redis["multi"]>,
-    entity: z.infer<S>,
-  ): void {
-    for (const field in this.indexedFields) {
-      const fieldKey = field as keyof z.infer<S>;
-      const indexType = this.indexedFields[fieldKey];
-      const value = entity[fieldKey];
-      const id = entity.id as string;
-
-      if (indexType === "set") {
-        if (value !== undefined && value !== null) {
-          multi.srem(
-            this.setIndexKey(fieldKey, value as z.infer<S>[keyof z.infer<S>]),
-            id,
-          );
-        }
-      } else if (indexType === "zset") {
-        multi.zrem(this.zsetIndexKey(fieldKey), id);
-      }
-    }
-  }
-
-  async delete(
-    id: string,
-    options?: KvOrmMethodOptions<string, boolean>,
-  ): Promise<boolean> {
-    const hooksToRun = [
-      this.initialHooks.delete,
-      options?.hooks,
-      this.dynamicHooks.delete,
-    ];
-
-    await this.runHooks(hooksToRun, "before", id);
-    const entity = await this.maybeGet(id);
-    if (!entity) return false;
-
-    const multi = this.kv.multi();
-    multi.del(this.key(id));
-    this.deleteIndexes(multi, entity);
-    const results = await multi.exec();
-
-    return results !== null && results[0] !== null && results[0][1] === 1;
-  }
-
-  async deleteAll(
-    pattern = "*",
-    options?: KvOrmMethodOptions<string, number>,
-  ): Promise<number> {
-    const hooksToRun = [
-      this.initialHooks.deleteAll,
-      options?.hooks,
-      this.dynamicHooks.deleteAll,
-    ];
-
-    await this.runHooks(hooksToRun, "before", pattern);
-
-    const keys = await this.scanKeys(pattern);
-    if (!keys.length) {
-      return 0;
-    }
-
-    const raws = await this.kv.mget(...keys);
-    const entities = raws.filter(Boolean).map((v) =>
-      this.entitySchema.parse(JSON.parse(v!))
-    );
-
-    const multi = this.kv.multi();
-    multi.del(...keys);
-    for (const entity of entities) {
-      this.deleteIndexes(multi, entity);
-    }
-    const results = await multi.exec();
-
-    if (results === null || !results[0] || results[0][1] === null) {
-      return 0;
-    }
-    const deletedCount = results[0][1] as number;
-
-    await this.runHooks(hooksToRun, "after", pattern, deletedCount);
-
-    return deletedCount;
-  }
-
-  addHooks(hooks: KvOrmHooks<S>) {
-    Object.assign(this.dynamicHooks, hooks);
   }
 }

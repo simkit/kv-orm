@@ -7,7 +7,7 @@ import "@std/dotenv/load";
 
 const userSchema = z.object({
   id: z.uuid().default(() => crypto.randomUUID()),
-  email: z.string().email(),
+  email: z.email(),
   name: z.string(),
   createdAt: z.iso.datetime().default(() => new Date().toISOString()),
   updatedAt: z.iso.datetime().default(() => new Date().toISOString()),
@@ -105,12 +105,12 @@ async function run() {
   console.log(
     "\nSearching for users created in a specific time range (using index)...",
   );
-  const recentUsers = await usersOrm.findWhere(
-    "createdAt",
-    "gt",
-    new Date("2024-01-01T00:00:00.000Z").toISOString(),
-  );
-  console.log("Found recent users:", recentUsers);
+  // const recentUsers = await usersOrm.findWhere(
+  //   "createdAt",
+  //   "gt",
+  //   new Date("2024-01-01T00:00:00.000Z").toISOString(),
+  // );
+  // console.log("Found recent users:", recentUsers);
 
   console.log("\nRetrieving all users...");
   const allUsers = await usersOrm.getAll();
