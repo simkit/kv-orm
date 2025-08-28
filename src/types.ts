@@ -1,14 +1,21 @@
 import z, { ZodObject, ZodRawShape } from "zod";
-import { type Redis } from "ioredis";
+import type { Redis } from "ioredis";
 
 // Required fields for entities
 export type RequiredZodFields = {
   id: z.ZodDefault<z.ZodUUID>;
-  updatedAt: z.ZodDefault<z.ZodISODateTime>;
-  createdAt: z.ZodDefault<z.ZodISODateTime>;
+
+  updatedAt: z.ZodDefault<z.ZodCoercedDate>;
+  createdAt: z.ZodDefault<z.ZodCoercedDate>;
 };
 
-// ORM options for the constructor
+// Operator Types
+export type OperatorFor<T> = T extends number | Date
+  ? "eq" | "ne" | "lt" | "lte" | "gt" | "gte" | "in" | "nin"
+  : T extends string ? "eq" | "ne" | "like" | "in" | "nin"
+  : "eq" | "ne" | "in" | "nin";
+
+// ORM Options for constructor
 export interface KvOrmOptions<
   S extends ZodObject<ZodRawShape> & { shape: RequiredZodFields },
 > {
@@ -19,22 +26,21 @@ export interface KvOrmOptions<
   indexedFields?: { [K in keyof z.infer<S>]?: "set" | "zset" };
 }
 
-// ORM options for individual methods. Now generic.
+// ORM Options for individual methods
 export interface KvOrmMethodOptions<Input, Result> {
   hooks?: Hooks<Input, Result>;
 }
 
-// Hook Args
+// Hook args + types
 export type BeforeHookArgs<Input> = { input: Input };
 export type AfterHookArgs<Input, Result> = { input: Input; result: Result };
 
-// Hooks type
 export type Hooks<Input, Result> = {
   before?: (args: BeforeHookArgs<Input>) => Promise<void> | void;
   after?: (args: AfterHookArgs<Input, Result>) => Promise<void> | void;
 };
 
-// Create a type for the findWhere input
+// FindWhere input
 export type FindWhereInput<
   S,
   K extends keyof z.infer<S>,
@@ -63,12 +69,6 @@ export type KvOrmHooks<
   delete?: Hooks<string, boolean>;
   deleteAll?: Hooks<string, number>;
 };
-
-export type OperatorFor<T> = T extends number | Date
-  ? "eq" | "ne" | "lt" | "lte" | "gt" | "gte" | "in" | "nin"
-  : T extends string
-    ? "eq" | "ne" | "lt" | "lte" | "gt" | "gte" | "like" | "in" | "nin"
-  : "eq" | "ne" | "in" | "nin";
 
 // ORM Context
 export interface KvOrmContext<

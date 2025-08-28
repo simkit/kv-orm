@@ -37,7 +37,6 @@ export class KvOrm<
     this.initialHooks = opts.hooks ?? {};
     this.indexedFields = opts.indexedFields ?? {};
 
-    // for internal methods
     this.context = {
       prefix: this.prefix,
       kv: this.kv,
@@ -127,15 +126,53 @@ export class KvOrm<
     Object.assign(this.dynamicHooks, hooks);
   }
 
+  public async rebuildIndexes(): Promise<void> {
+    const ids = await this.kv.smembers(this.allKey());
+    const multi = this.kv.multi();
+
+    for (const field in this.indexedFields) {
+      const indexType = this.indexedFields[field as keyof z.infer<S>];
+      if (indexType === "set") {
+        const keys = await this.kv.keys(`${this.prefix}:idx:set:${field}:*`);
+        if (keys.length) multi.del(...keys);
+      } else if (indexType === "zset") {
+        multi.del(this.zsetIndexKey(field as keyof z.infer<S>));
+      }
+    }
+
+    for (const id of ids) {
+      const raw = await this.kv.get(this.key(id));
+      if (!raw) continue;
+      const entity = this.entitySchema.parse(JSON.parse(raw));
+      this.updateIndexes(multi, entity, false);
+    }
+
+    await multi.exec();
+  }
+
   private key(id: string): string {
     return `${this.prefix}:${id}`;
+  }
+
+  private allKey(): string {
+    return `${this.prefix}:all`;
+  }
+
+  private normalizeIndexValue(value: unknown): string {
+    if (value instanceof Date) return value.toISOString();
+    if (typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+    return String(value);
   }
 
   private setIndexKey<K extends keyof z.infer<S>>(
     field: K,
     value: z.infer<S>[K],
   ): string {
-    return `${this.prefix}:idx:set:${String(field)}:${value}`;
+    return `${this.prefix}:idx:set:${String(field)}:${
+      this.normalizeIndexValue(value)
+    }`;
   }
 
   private zsetIndexKey(field: keyof z.infer<S>): string {
@@ -181,6 +218,8 @@ export class KvOrm<
     isUpdate: boolean = false,
     oldEntity?: z.infer<S>,
   ): void {
+    multi.sadd(this.allKey(), entity.id as string);
+
     for (const field in this.indexedFields) {
       const fieldKey = field as keyof z.infer<S>;
       const indexType = this.indexedFields[fieldKey];
@@ -197,20 +236,14 @@ export class KvOrm<
         if (value !== undefined && value !== null) {
           multi.sadd(this.setIndexKey(fieldKey, value), id);
         }
-      } else if (
-        indexType === "zset" && (isUpdate ? oldValue !== value : true)
-      ) {
-        const score = (value instanceof Date)
-          ? value.getTime()
-          : (typeof value === "string")
-          ? new Date(value).getTime()
-          : value as number;
-
-        if (
-          !isNaN(score) && score !== undefined && score !== null &&
-          typeof score === "number"
-        ) {
-          multi.zadd(this.zsetIndexKey(fieldKey), score, id);
+      } else if (indexType === "zset") {
+        if (typeof value === "string") {
+          multi.zadd(this.zsetIndexKey(fieldKey), 0, `${value}||${id}`);
+        } else {
+          const score = value instanceof Date ? value.getTime() : Number(value);
+          if (!isNaN(score)) {
+            multi.zadd(this.zsetIndexKey(fieldKey), score, id);
+          }
         }
       }
     }
@@ -220,6 +253,8 @@ export class KvOrm<
     multi: ReturnType<Redis["multi"]>,
     entity: z.infer<S>,
   ): void {
+    multi.srem(this.allKey(), entity.id as string);
+
     for (const field in this.indexedFields) {
       const fieldKey = field as keyof z.infer<S>;
       const indexType = this.indexedFields[fieldKey];
@@ -228,13 +263,14 @@ export class KvOrm<
 
       if (indexType === "set") {
         if (value !== undefined && value !== null) {
-          multi.srem(
-            this.setIndexKey(fieldKey, value as z.infer<S>[keyof z.infer<S>]),
-            id,
-          );
+          multi.srem(this.setIndexKey(fieldKey, value), id);
         }
       } else if (indexType === "zset") {
-        multi.zrem(this.zsetIndexKey(fieldKey), id);
+        if (typeof value === "string") {
+          multi.zrem(this.zsetIndexKey(fieldKey), `${value}||${id}`);
+        } else {
+          multi.zrem(this.zsetIndexKey(fieldKey), id);
+        }
       }
     }
   }
@@ -253,7 +289,7 @@ export class KvOrm<
       id = randomUUID();
     }
 
-    const now = new Date().toISOString();
+    const now = new Date();
 
     return this.entitySchema.parse({
       ...data,
@@ -286,77 +322,94 @@ export class KvOrm<
             const keys = value.map((val) =>
               this.setIndexKey(field, val as z.infer<S>[K])
             );
-            const tempKey = `${this.prefix}:temp:${randomUUID()}`;
-            const results = await this.kv.multi()
-              .sunionstore(tempKey, ...keys)
-              .expire(tempKey, 30)
-              .exec();
-
-            if (results && results[0] && results[0][1] !== null) {
-              ids = await this.kv.smembers(tempKey);
-            }
+            ids = await this.kv.sunion(...keys);
           }
           break;
-        case "ne": {
-          const allIds = await this.scanKeys().then((keys) =>
-            keys.map((k) => k.replace(`${this.prefix}:`, ""))
-          );
-          const badIds = await this.kv.smembers(
+        case "ne":
+          ids = await this.kv.sdiff(
+            this.allKey(),
             this.setIndexKey(field, value as z.infer<S>[K]),
           );
-          ids = allIds.filter((id) => !badIds.includes(id));
           break;
-        }
-        case "nin": {
-          const allIds = await this.scanKeys().then((keys) =>
-            keys.map((k) => k.replace(`${this.prefix}:`, ""))
-          );
-          const badIds = Array.isArray(value)
-            ? await this.kv.sunion(
-              ...value.map((v) => this.setIndexKey(field, v as z.infer<S>[K])),
-            )
-            : [];
-          ids = allIds.filter((id) => !badIds.includes(id));
+        case "nin":
+          if (Array.isArray(value) && value.length > 0) {
+            const badKeys = value.map((v) =>
+              this.setIndexKey(field, v as z.infer<S>[K])
+            );
+            ids = await this.kv.sdiff(this.allKey(), ...badKeys);
+          } else {
+            ids = await this.kv.smembers(this.allKey());
+          }
           break;
-        }
       }
     } else if (indexType === "zset") {
-      const val = (value instanceof Date ||
-          (typeof value === "string" && !isNaN(new Date(value).getTime())))
-        ? new Date(value as string).getTime()
-        : Number(value);
-      const start = "-inf";
-      const end = "+inf";
+      if (typeof value === "string") {
+        switch (operator) {
+          case "lt":
+            ids = await this.kv.zrangebylex(
+              this.zsetIndexKey(field),
+              "-",
+              `(${value}`,
+            );
+            break;
+          case "lte":
+            ids = await this.kv.zrangebylex(
+              this.zsetIndexKey(field),
+              "-",
+              `[${value}`,
+            );
+            break;
+          case "gt":
+            ids = await this.kv.zrangebylex(
+              this.zsetIndexKey(field),
+              `(${value}`,
+              "+",
+            );
+            break;
+          case "gte":
+            ids = await this.kv.zrangebylex(
+              this.zsetIndexKey(field),
+              `[${value}`,
+              "+",
+            );
+            break;
+        }
+        ids = ids.map((x) => x.split("||")[1]);
+      } else {
+        const val = value instanceof Date ? value.getTime() : Number(value);
+        const start = "-inf";
+        const end = "+inf";
 
-      switch (operator) {
-        case "lt":
-          ids = await this.kv.zrangebyscore(
-            this.zsetIndexKey(field),
-            start,
-            `(${val}`,
-          );
-          break;
-        case "lte":
-          ids = await this.kv.zrangebyscore(
-            this.zsetIndexKey(field),
-            start,
-            `${val}`,
-          );
-          break;
-        case "gt":
-          ids = await this.kv.zrangebyscore(
-            this.zsetIndexKey(field),
-            `(${val}`,
-            end,
-          );
-          break;
-        case "gte":
-          ids = await this.kv.zrangebyscore(
-            this.zsetIndexKey(field),
-            `${val}`,
-            end,
-          );
-          break;
+        switch (operator) {
+          case "lt":
+            ids = await this.kv.zrangebyscore(
+              this.zsetIndexKey(field),
+              start,
+              `(${val}`,
+            );
+            break;
+          case "lte":
+            ids = await this.kv.zrangebyscore(
+              this.zsetIndexKey(field),
+              start,
+              `${val}`,
+            );
+            break;
+          case "gt":
+            ids = await this.kv.zrangebyscore(
+              this.zsetIndexKey(field),
+              `(${val}`,
+              end,
+            );
+            break;
+          case "gte":
+            ids = await this.kv.zrangebyscore(
+              this.zsetIndexKey(field),
+              `${val}`,
+              end,
+            );
+            break;
+        }
       }
     }
 

@@ -9,8 +9,8 @@ const userSchema = z.object({
   id: z.uuid().default(() => crypto.randomUUID()),
   email: z.email(),
   name: z.string(),
-  createdAt: z.iso.datetime().default(() => new Date().toISOString()),
-  updatedAt: z.iso.datetime().default(() => new Date().toISOString()),
+  createdAt: z.coerce.date().default(() => new Date()),
+  updatedAt: z.coerce.date().default(() => new Date()),
 });
 
 const kv = new Redis(Deno.env.get("REDIS_URL") as string);
@@ -108,7 +108,7 @@ async function run() {
   const recentUsers = await usersOrm.findWhere(
     "createdAt",
     "gte",
-    new Date("2024-01-01T00:00:00.000Z").toISOString(),
+    new Date("2024-01-01T00:00:00.000Z"),
   );
   // const recentUsers = await usersOrm.findWhere(
   //   "name",
@@ -121,9 +121,9 @@ async function run() {
   const allUsers = await usersOrm.getAll();
   console.log("All users in the database:", allUsers);
 
-  // console.log("\nDeleting all users...");
-  // const deletedCount = await usersOrm.deleteAll();
-  // console.log("Deleted", deletedCount, "users.");
+  console.log("\nDeleting all users...");
+  const deletedCount = await usersOrm.deleteAll();
+  console.log("Deleted", deletedCount, "users.");
 
   kv.quit();
 }
