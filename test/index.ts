@@ -2,7 +2,7 @@ import { z } from "zod";
 import { Redis } from "ioredis";
 
 import "@std/dotenv/load";
-import { KvOrm, KvOrmSchema } from "@kv-orm/orm";
+import { KvOrm, KvOrmSchema } from "@simkit/kv-orm";
 
 const userSchema = KvOrmSchema({
   email: z.email(),

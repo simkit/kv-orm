@@ -1,5 +1,5 @@
 {
-  "name": "@kv-orm/orm",
+  "name": "@simkit/kv-orm",
   "version": "0.1.0",
   "exports": {
     ".": "./src/index.ts"
