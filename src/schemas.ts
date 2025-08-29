@@ -8,7 +8,11 @@ import crypto from "node:crypto";
  * - createdAt: Date (set on insert, defaults to now)
  * - updatedAt: Date (set on insert/update, defaults to now)
  */
-export const baseFields = {
+export const baseFields: {
+  id: z.ZodDefault<z.ZodUUID>;
+  createdAt: z.ZodDefault<z.ZodCoercedDate>;
+  updatedAt: z.ZodDefault<z.ZodCoercedDate>;
+} = {
   id: z.uuid().default(() => crypto.randomUUID()),
   createdAt: z.coerce.date().default(() => new Date()),
   updatedAt: z.coerce.date().default(() => new Date()),

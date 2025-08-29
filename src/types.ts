@@ -1,6 +1,6 @@
 import type { z, ZodObject, ZodRawShape } from "zod";
 import type { Redis } from "ioredis";
-import type { baseFields } from "./schema.ts";
+import type { baseFields } from "./schemas.ts";
 
 // Required fields for entities
 export type RequiredZodFields = typeof baseFields;
