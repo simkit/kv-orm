@@ -1,5 +1,5 @@
-import { z, ZodObject, ZodRawShape } from "zod";
-import {
+import type { z, ZodObject, ZodRawShape } from "zod";
+import type {
   KvOrmContext,
   KvOrmMethodOptions,
   OperatorFor,

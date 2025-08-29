@@ -1,4 +1,9 @@
 {
+  "name": "@kv-orm/orm",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "tasks": {
     "dev": "deno run --allow-env --allow-net --allow-read test/index.ts"
   },

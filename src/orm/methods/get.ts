@@ -1,6 +1,6 @@
-import { z, ZodObject, ZodRawShape } from "zod";
+import type { z, ZodObject, ZodRawShape } from "zod";
 import { NotFoundError } from "../../errors.ts";
-import {
+import type {
   KvOrmContext,
   KvOrmMethodOptions,
   RequiredZodFields,
