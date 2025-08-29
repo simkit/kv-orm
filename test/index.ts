@@ -1,16 +1,12 @@
 import { z } from "zod";
-import crypto from "node:crypto";
 import { Redis } from "ioredis";
-import { KvOrm } from "../src/orm/index.ts";
 
 import "@std/dotenv/load";
+import { KvOrm, KvOrmSchema } from "@kv-orm/orm";
 
-const userSchema = z.object({
-  id: z.uuid().default(() => crypto.randomUUID()),
+const userSchema = KvOrmSchema({
   email: z.email(),
   name: z.string(),
-  createdAt: z.coerce.date().default(() => new Date()),
-  updatedAt: z.coerce.date().default(() => new Date()),
 });
 
 const kv = new Redis(Deno.env.get("REDIS_URL") as string);

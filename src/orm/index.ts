@@ -20,16 +20,42 @@ import { findWhere } from "./methods/find.ts";
 export class KvOrm<
   S extends ZodObject<ZodRawShape> & { shape: RequiredZodFields },
 > {
+  /** Redis key prefix for this entity type. */
   public prefix: string;
+
+  /** Redis client instance. */
   public kv: Redis;
+
+  /** Zod schema for validating entities. */
   public readonly entitySchema: S;
+
+  /** Global hooks registered at construction. */
   public readonly initialHooks: KvOrmHooks<S>;
+
+  /** Dynamically added hooks (merged with initialHooks). */
   public dynamicHooks: KvOrmHooks<S> = {};
 
+  /** Configured secondary indexes for this entity. */
   public indexedFields: { [K in keyof z.infer<S>]?: "set" | "zset" };
 
   private readonly context: KvOrmContext<S>;
 
+  /**
+   * Redis-backed ORM with Zod validation and optional secondary indexes.
+   *
+   * Every schema must include these required fields:
+   * - id: UUID (auto-generated if not provided)
+   * - createdAt: Date (set on insert)
+   * - updatedAt: Date (set on insert and update)
+   *
+   * To avoid repeating these fields, define your schema with `KvOrmSchema`:
+   *
+   * Example:
+   * const userSchema = KvOrmSchema({
+   *   email: z.string().email(),
+   *   name: z.string(),
+   * });
+   */
   constructor(opts: KvOrmOptions<S>) {
     this.prefix = opts.prefix;
     this.kv = opts.kv;
@@ -56,31 +82,50 @@ export class KvOrm<
     };
   }
 
+  /**
+   * Create a new entity. Generates UUID and timestamps automatically.
+   */
   public create = (
     data: z.input<S>,
     options?: KvOrmMethodOptions<z.input<S>, z.infer<S>>,
   ) => create(this.context, data, options);
 
+  /**
+   * Create multiple entities in one batch.
+   */
   public createBulk = (
     data: z.input<S>[],
     options?: KvOrmMethodOptions<z.input<S>[], z.infer<S>[]>,
   ) => createBulk(this.context, data, options);
 
+  /**
+   * Get an entity by ID. Throws error if not found.
+   */
   public get = (
     id: string,
     options?: KvOrmMethodOptions<string, z.infer<S>>,
   ) => get(this.context, id, options);
 
+  /**
+   * Get an entity by ID, or return null if missing.
+   */
   public maybeGet = (
     id: string,
     options?: KvOrmMethodOptions<string, z.infer<S> | null>,
   ) => maybeGet(this.context, id, options);
 
+  /**
+   * Get all entities matching a Redis key pattern (default "*").
+   */
   public getAll = (
     pattern = "*",
     options?: KvOrmMethodOptions<string, z.infer<S>[]>,
   ) => getAll(this.context, pattern, options);
 
+  /**
+   * Find entities where a field satisfies an operator and value.
+   * Tips: the indexed fields will make querying faster.
+   */
   public findWhere = <
     K extends keyof z.infer<S>,
     V extends z.infer<S>[K],
@@ -94,6 +139,9 @@ export class KvOrm<
     >,
   ) => findWhere(this.context, field, operator, value, options);
 
+  /**
+   * Make a partial update to an entity. Returns null if not found.
+   */
   public update = (
     id: string,
     patch: Partial<z.input<S>>,
@@ -103,6 +151,9 @@ export class KvOrm<
     >,
   ) => update(this.context, id, patch, options);
 
+  /**
+   * Make a partial update to an entity. Throws error if entity does not exist
+   */
   public updateOrFail = (
     id: string,
     patch: Partial<z.input<S>>,
@@ -112,20 +163,32 @@ export class KvOrm<
     >,
   ) => updateOrFail(this.context, id, patch, options);
 
+  /**
+   * Delete an entity by ID.
+   */
   public delete = (
     id: string,
     options?: KvOrmMethodOptions<string, boolean>,
   ) => deleteEntity(this.context, id, options);
 
+  /**
+   * Delete all entities matching a key pattern (default "*").
+   */
   public deleteAll = (
     pattern = "*",
     options?: KvOrmMethodOptions<string, number>,
   ) => deleteAll(this.context, pattern, options);
 
+  /**
+   * Add runtime hooks (merged into existing hooks).
+   */
   public addHooks(hooks: KvOrmHooks<S>) {
     Object.assign(this.dynamicHooks, hooks);
   }
 
+  /**
+   * Rebuild all secondary indexes from stored entities.
+   */
   public async rebuildIndexes(): Promise<void> {
     const ids = await this.kv.smembers(this.allKey());
     const multi = this.kv.multi();

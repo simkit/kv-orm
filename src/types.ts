@@ -1,13 +1,9 @@
-import z, { ZodObject, ZodRawShape } from "zod";
+import type { z, ZodObject, ZodRawShape } from "zod";
 import type { Redis } from "ioredis";
+import type { baseFields } from "./schema.ts";
 
 // Required fields for entities
-export type RequiredZodFields = {
-  id: z.ZodDefault<z.ZodUUID>;
-
-  updatedAt: z.ZodDefault<z.ZodCoercedDate>;
-  createdAt: z.ZodDefault<z.ZodCoercedDate>;
-};
+export type RequiredZodFields = typeof baseFields;
 
 // Operator Types
 export type OperatorFor<T> = T extends number | Date
