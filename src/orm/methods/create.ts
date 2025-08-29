@@ -5,6 +5,9 @@ import type {
   RequiredZodFields,
 } from "../../types.ts";
 
+/**
+ * Create a new entity. Generates UUID and timestamps automatically.
+ */
 export async function create<
   S extends ZodObject<ZodRawShape> & { shape: RequiredZodFields },
 >(
@@ -31,6 +34,9 @@ export async function create<
   return entity;
 }
 
+/**
+ * Create multiple entities in one batch.
+ */
 export async function createBulk<
   S extends ZodObject<ZodRawShape> & { shape: RequiredZodFields },
 >(

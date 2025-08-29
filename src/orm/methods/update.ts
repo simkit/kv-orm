@@ -6,6 +6,9 @@ import type {
 } from "../../types.ts";
 import { get, maybeGet } from "./get.ts";
 
+/**
+ * Make a partial update to an entity. Returns null if not found.
+ */
 export async function update<
   S extends ZodObject<ZodRawShape> & { shape: RequiredZodFields },
 >(
@@ -51,6 +54,9 @@ export async function update<
   return updated;
 }
 
+/**
+ * Make a partial update to an entity. Throws error if entity does not exist
+ */
 export async function updateOrFail<
   S extends ZodObject<ZodRawShape> & { shape: RequiredZodFields },
 >(

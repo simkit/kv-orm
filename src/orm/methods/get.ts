@@ -6,6 +6,9 @@ import type {
   RequiredZodFields,
 } from "../../types.ts";
 
+/**
+ * Get an entity by ID. Throws error if not found.
+ */
 export async function get<
   S extends ZodObject<ZodRawShape> & { shape: RequiredZodFields },
 >(
@@ -29,6 +32,9 @@ export async function get<
   return entity;
 }
 
+/**
+ * Get an entity by ID, or return null if missing.
+ */
 export async function maybeGet<
   S extends ZodObject<ZodRawShape> & { shape: RequiredZodFields },
 >(
@@ -52,6 +58,9 @@ export async function maybeGet<
   return entity;
 }
 
+/**
+ * Get all entities matching a Redis key pattern (default "*").
+ */
 export async function getAll<
   S extends ZodObject<ZodRawShape> & { shape: RequiredZodFields },
 >(

@@ -50,7 +50,7 @@ export class KvOrm<
    *
    * To avoid repeating these fields, define your schema with `KvOrmSchema`:
    *
-   * Example:
+   * @example
    * const userSchema = KvOrmSchema({
    *   email: z.string().email(),
    *   name: z.string(),
@@ -83,7 +83,17 @@ export class KvOrm<
   }
 
   /**
-   * Create a new entity. Generates UUID and timestamps automatically.
+   * Create a new entity in Redis.
+   *
+   * Automatically generates `id`, `createdAt`, and `updatedAt`.
+   * Runs global and per-method hooks (`before` and `after`).
+   *
+   * @param data Entity input matching the schema
+   * @param options Optional method hooks
+   * @returns The created entity
+   *
+   * @example
+   * const user = await orm.create({ email: "alice@example.com", name: "Alice" });
    */
   public create = (
     data: z.input<S>,
@@ -92,6 +102,19 @@ export class KvOrm<
 
   /**
    * Create multiple entities in one batch.
+   *
+   * Automatically generates `id`, `createdAt`, and `updatedAt` for each entity.
+   * Runs global and per-method hooks (`before` and `after`).
+   *
+   * @param data Array of entity inputs matching the schema
+   * @param options Optional method hooks
+   * @returns Array of created entities
+   *
+   * @example
+   * const users = await orm.createBulk([
+   *   { email: "bob@example.com", name: "Bob" },
+   *   { email: "carol@example.com", name: "Carol" }
+   * ]);
    */
   public createBulk = (
     data: z.input<S>[],
@@ -99,7 +122,16 @@ export class KvOrm<
   ) => createBulk(this.context, data, options);
 
   /**
-   * Get an entity by ID. Throws error if not found.
+   * Get an entity by ID.
+   *
+   * Throws an error if the entity is not found.
+   *
+   * @param id Entity ID
+   * @param options Optional method hooks
+   * @returns The entity
+   *
+   * @example
+   * const user = await userOrm.get("uuid-of-user");
    */
   public get = (
     id: string,
@@ -107,7 +139,14 @@ export class KvOrm<
   ) => get(this.context, id, options);
 
   /**
-   * Get an entity by ID, or return null if missing.
+   * Get an entity by ID, or return `null` if not found.
+   *
+   * @param id Entity ID
+   * @param options Optional method hooks
+   * @returns The entity or `null`
+   *
+   *  @example
+   * const user = await userOrm.maybeGet("uuid-of-user");
    */
   public maybeGet = (
     id: string,
@@ -115,7 +154,16 @@ export class KvOrm<
   ) => maybeGet(this.context, id, options);
 
   /**
-   * Get all entities matching a Redis key pattern (default "*").
+   * Get all entities matching a Redis key pattern.
+   *
+   * Default pattern is `"*"`.
+   *
+   * @param pattern Redis key pattern
+   * @param options Optional method hooks
+   * @returns Array of entities
+   *
+   * @example
+   * const allUsers = await userOrm.getAll();
    */
   public getAll = (
     pattern = "*",
@@ -124,7 +172,17 @@ export class KvOrm<
 
   /**
    * Find entities where a field satisfies an operator and value.
-   * Tips: the indexed fields will make querying faster.
+   *
+   * Uses secondary indexes if available.
+   *
+   * @param field Field to query
+   * @param operator Comparison operator
+   * @param value Value(s) to compare
+   * @param options Optional method hooks
+   * @returns Array of matching entities
+   *
+   * @example
+   * const users = await userOrm.findWhere("email", "eq", "bob@example.com");
    */
   public findWhere = <
     K extends keyof z.infer<S>,
@@ -140,7 +198,17 @@ export class KvOrm<
   ) => findWhere(this.context, field, operator, value, options);
 
   /**
-   * Make a partial update to an entity. Returns null if not found.
+   * Update an entity partially by ID.
+   *
+   * Returns `null` if the entity does not exist.
+   *
+   * @param id Entity ID
+   * @param patch Partial update object
+   * @param options Optional method hooks
+   * @returns Updated entity or `null`
+   *
+   * @example
+   * const updated = await userOrm.update("uuid-of-user", { name: "New Name" });
    */
   public update = (
     id: string,
@@ -152,7 +220,17 @@ export class KvOrm<
   ) => update(this.context, id, patch, options);
 
   /**
-   * Make a partial update to an entity. Throws error if entity does not exist
+   * Update an entity partially by ID.
+   *
+   * Throws an error if the entity does not exist.
+   *
+   * @param id Entity ID
+   * @param patch Partial update object
+   * @param options Optional method hooks
+   * @returns Updated entity
+   *
+   * @example
+   * const updated = await userOrm.updateOrFail("uuid-of-user", { name: "New Name" });
    */
   public updateOrFail = (
     id: string,
@@ -165,6 +243,13 @@ export class KvOrm<
 
   /**
    * Delete an entity by ID.
+   *
+   * @param id Entity ID
+   * @param options Optional method hooks
+   * @returns `true` if deleted, `false` otherwise
+   *
+   * @example
+   * const success = await userOrm.delete("uuid-of-user");
    */
   public delete = (
     id: string,
@@ -172,7 +257,16 @@ export class KvOrm<
   ) => deleteEntity(this.context, id, options);
 
   /**
-   * Delete all entities matching a key pattern (default "*").
+   * Delete all entities matching a Redis key pattern.
+   *
+   * Default pattern is `"*"`.
+   *
+   * @param pattern Redis key pattern
+   * @param options Optional method hooks
+   * @returns Number of deleted entities
+   *
+   * @example
+   * const deletedCount = await userOrm.deleteAll();
    */
   public deleteAll = (
     pattern = "*",
@@ -180,14 +274,20 @@ export class KvOrm<
   ) => deleteAll(this.context, pattern, options);
 
   /**
-   * Add runtime hooks (merged into existing hooks).
+   * Add runtime hooks for the entity type.
+   *
+   * Merges with existing dynamic hooks.
+   *
+   * @param hooks Hooks object
    */
   public addHooks(hooks: KvOrmHooks<S>) {
     Object.assign(this.dynamicHooks, hooks);
   }
 
   /**
-   * Rebuild all secondary indexes from stored entities.
+   * Rebuild all secondary indexes from existing entities in Redis.
+   *
+   * Useful after changing index configuration or recovering from data corruption.
    */
   public async rebuildIndexes(): Promise<void> {
     const ids = await this.kv.smembers(this.allKey());

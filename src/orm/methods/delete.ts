@@ -6,6 +6,9 @@ import type {
 } from "../../types.ts";
 import { maybeGet } from "./get.ts";
 
+/**
+ * Delete an entity by ID.
+ */
 export async function deleteEntity<
   S extends ZodObject<ZodRawShape> & { shape: RequiredZodFields },
 >(
@@ -31,6 +34,9 @@ export async function deleteEntity<
   return results !== null && results[0] !== null && results[0][1] === 1;
 }
 
+/**
+ * Delete all entities matching a key pattern (default "*").
+ */
 export async function deleteAll<
   S extends ZodObject<ZodRawShape> & { shape: RequiredZodFields },
 >(

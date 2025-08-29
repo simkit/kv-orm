@@ -8,26 +8,15 @@ a **Redis-backed ORM** with Zod validation, automatic
 
 ```bash
 # Using Deno
-deno add jsr:@simkit/kv-orm npm:zod
+deno add jsr:@simkit/kv-orm npm:ioredis npm:zod
 
-# Using pnpm
-pnpm add jsr:@simkit/kv-orm zod
+# Using pnpm (bun, npm)
+pnpm add jsr:@simkit/kv-orm ioredis zod
 ```
 
-## Roadmap
-
-- **Migration System** – Support for schema migrations and versioning of
-  entities.
-- **Query Pagination** – Add `offset` and `limit` parameters for `getAll` and
-  `findWhere` queries.
-- **Advanced Indexing** – Support compound and multi-field indexes.
-- **Batch Operations** – Further optimizations for large bulk inserts/updates.
-- **TypeScript Enhancements** – Explore stricter compile-time checks for
-  reserved fields without runtime errors.
-
-> Contributions and suggestions are welcome!
-
 ## Basic Usage
+
+> full example: [example.ts](./example.ts)
 
 ```ts
 import { KvOrm, KvOrmSchema } from "@simkit/kv-orm";
@@ -226,6 +215,19 @@ const usersOrm = new KvOrm({
   },
 });
 ```
+
+## Roadmap
+
+- **Migration System** – Support for schema migrations and versioning of
+  entities.
+- **Query Pagination** – Add `offset` and `limit` parameters for `getAll` and
+  `findWhere` queries.
+- **Advanced Indexing** – Support compound and multi-field indexes.
+- **Batch Operations** – Further optimizations for large bulk inserts/updates.
+- **TypeScript Enhancements** – Explore stricter compile-time checks for
+  reserved fields without runtime errors.
+
+> Contributions and suggestions are welcome!
 
 ## License
 

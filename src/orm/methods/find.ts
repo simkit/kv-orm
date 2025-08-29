@@ -7,6 +7,10 @@ import type {
 } from "../../types.ts";
 import { getAll } from "./get.ts";
 
+/**
+ * Find entities where a field satisfies an operator and value.
+ * Tips: the indexed fields will make querying faster.
+ */
 export async function findWhere<
   S extends ZodObject<ZodRawShape> & { shape: RequiredZodFields },
   K extends keyof z.infer<S>,
