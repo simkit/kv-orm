@@ -1,4 +1,4 @@
-import { z, type ZodRawShape } from "zod";
+import { z } from "zod";
 import crypto from "node:crypto";
 
 /**
@@ -33,7 +33,9 @@ export const baseFields = {
  * });
  * ```
  */
-export const KvOrmSchema = <T extends ZodRawShape>(shape: T) => {
+export const KvOrmSchema = <T extends Record<string, z.ZodType>>(
+  shape: T,
+): z.ZodObject<typeof baseFields & T> => {
   const reservedKeys = Object.keys(baseFields);
 
   for (const key of reservedKeys) {
@@ -48,5 +50,5 @@ export const KvOrmSchema = <T extends ZodRawShape>(shape: T) => {
   return z.object({
     ...baseFields,
     ...shape,
-  });
+  }) as z.ZodObject<typeof baseFields & T>;
 };

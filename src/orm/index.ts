@@ -98,7 +98,7 @@ export class KvOrm<
   public create = (
     data: z.input<S>,
     options?: KvOrmMethodOptions<z.input<S>, z.infer<S>>,
-  ) => create(this.context, data, options);
+  ): Promise<z.infer<S>> => create(this.context, data, options);
 
   /**
    * Create multiple entities in one batch.
@@ -119,7 +119,7 @@ export class KvOrm<
   public createBulk = (
     data: z.input<S>[],
     options?: KvOrmMethodOptions<z.input<S>[], z.infer<S>[]>,
-  ) => createBulk(this.context, data, options);
+  ): Promise<z.infer<S>[]> => createBulk(this.context, data, options);
 
   /**
    * Get an entity by ID.
@@ -136,7 +136,7 @@ export class KvOrm<
   public get = (
     id: string,
     options?: KvOrmMethodOptions<string, z.infer<S>>,
-  ) => get(this.context, id, options);
+  ): Promise<z.infer<S>> => get(this.context, id, options);
 
   /**
    * Get an entity by ID, or return `null` if not found.
@@ -151,7 +151,7 @@ export class KvOrm<
   public maybeGet = (
     id: string,
     options?: KvOrmMethodOptions<string, z.infer<S> | null>,
-  ) => maybeGet(this.context, id, options);
+  ): Promise<z.infer<S> | null> => maybeGet(this.context, id, options);
 
   /**
    * Get all entities matching a Redis key pattern.
@@ -168,7 +168,7 @@ export class KvOrm<
   public getAll = (
     pattern = "*",
     options?: KvOrmMethodOptions<string, z.infer<S>[]>,
-  ) => getAll(this.context, pattern, options);
+  ): Promise<z.infer<S>[]> => getAll(this.context, pattern, options);
 
   /**
    * Find entities where a field satisfies an operator and value.
@@ -195,7 +195,8 @@ export class KvOrm<
       { field: K; operator: OperatorFor<V>; value: V | V[] },
       z.infer<S>[]
     >,
-  ) => findWhere(this.context, field, operator, value, options);
+  ): Promise<z.infer<S>[]> =>
+    findWhere(this.context, field, operator, value, options);
 
   /**
    * Update an entity partially by ID.
@@ -217,7 +218,7 @@ export class KvOrm<
       { id: string; patch: Partial<z.input<S>> },
       z.infer<S> | null
     >,
-  ) => update(this.context, id, patch, options);
+  ): Promise<z.infer<S> | null> => update(this.context, id, patch, options);
 
   /**
    * Update an entity partially by ID.
@@ -239,7 +240,7 @@ export class KvOrm<
       { id: string; patch: Partial<z.input<S>> },
       z.infer<S>
     >,
-  ) => updateOrFail(this.context, id, patch, options);
+  ): Promise<z.infer<S>> => updateOrFail(this.context, id, patch, options);
 
   /**
    * Delete an entity by ID.
@@ -254,7 +255,7 @@ export class KvOrm<
   public delete = (
     id: string,
     options?: KvOrmMethodOptions<string, boolean>,
-  ) => deleteEntity(this.context, id, options);
+  ): Promise<boolean> => deleteEntity(this.context, id, options);
 
   /**
    * Delete all entities matching a Redis key pattern.
@@ -271,7 +272,7 @@ export class KvOrm<
   public deleteAll = (
     pattern = "*",
     options?: KvOrmMethodOptions<string, number>,
-  ) => deleteAll(this.context, pattern, options);
+  ): Promise<number> => deleteAll(this.context, pattern, options);
 
   /**
    * Add runtime hooks for the entity type.
