@@ -17,6 +17,11 @@ import { update, updateOrFail } from "./methods/update.ts";
 import { deleteAll, deleteEntity } from "./methods/delete.ts";
 import { findWhere } from "./methods/find.ts";
 
+/**
+ * Redis-backed ORM with Zod validation and optional secondary indexes.
+ *
+ * @typeParam S - Zod schema type for entities
+ */
 export class KvOrm<
   S extends ZodObject<ZodRawShape> & { shape: RequiredZodFields },
 > {
@@ -314,14 +319,17 @@ export class KvOrm<
     await multi.exec();
   }
 
+  /** @internal Returns Redis key for a given entity ID */
   private key(id: string): string {
     return `${this.prefix}:${id}`;
   }
 
+  /** @internal Returns Redis key for all entity IDs */
   private allKey(): string {
     return `${this.prefix}:all`;
   }
 
+  /** @internal Normalizes a value for Redis indexing */
   private normalizeIndexValue(value: unknown): string {
     if (value instanceof Date) return value.toISOString();
     if (typeof value === "number" || typeof value === "boolean") {
@@ -330,6 +338,7 @@ export class KvOrm<
     return String(value);
   }
 
+  /** @internal Returns Redis key for a set index */
   private setIndexKey<K extends keyof z.infer<S>>(
     field: K,
     value: z.infer<S>[K],
@@ -339,10 +348,12 @@ export class KvOrm<
     }`;
   }
 
+  /** @internal Returns Redis key for a zset index */
   private zsetIndexKey(field: keyof z.infer<S>): string {
     return `${this.prefix}:idx:zset:${String(field)}`;
   }
 
+  /** @internal Runs before/after hooks */
   private async runHooks<Input, Result>(
     hooks: Array<KvOrmMethodOptions<Input, Result>["hooks"] | undefined>,
     phase: "before" | "after",
@@ -359,6 +370,7 @@ export class KvOrm<
     }
   }
 
+  /** @internal Scans Redis keys with a pattern */
   private async scanKeys(pattern = "*", count = 100): Promise<string[]> {
     const keys: string[] = [];
     let cursor = "0";
@@ -376,6 +388,7 @@ export class KvOrm<
     return keys;
   }
 
+  /** @internal Updates secondary indexes for an entity */
   private updateIndexes(
     multi: ReturnType<Redis["multi"]>,
     entity: z.infer<S>,
@@ -413,6 +426,7 @@ export class KvOrm<
     }
   }
 
+  /** @internal Deletes secondary indexes for an entity */
   private deleteIndexes(
     multi: ReturnType<Redis["multi"]>,
     entity: z.infer<S>,
@@ -439,6 +453,7 @@ export class KvOrm<
     }
   }
 
+  /** @internal Normalizes entity by filling required fields */
   private normalizeEntity(
     data: z.input<S> | z.infer<S>,
     isNew = true,
@@ -463,6 +478,7 @@ export class KvOrm<
     });
   }
 
+  /** @internal Finds entity IDs from secondary indexes */
   private async findWhereIndexed<
     K extends keyof z.infer<S>,
     V extends z.infer<S>[K],
